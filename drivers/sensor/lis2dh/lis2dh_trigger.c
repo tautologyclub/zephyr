@@ -47,8 +47,13 @@ static int lis2dh_trigger_drdy_set(const struct device *dev,
 	/* cancel potentially pending trigger */
 	atomic_clear_bit(&lis2dh->trig_flags, TRIGGED_INT1);
 
+#if defined(CONFIG_LIS2DH_FIFO_MODE)
+	status = lis2dh->hw_tf->write_reg(dev, LIS2DH_REG_CTRL3,
+					  LIS2DH_EN_WTM_INT1);
+#else
 	status = lis2dh->hw_tf->update_reg(dev, LIS2DH_REG_CTRL3,
 					   LIS2DH_EN_DRDY1_INT1, 0);
+#endif
 
 	lis2dh->handler_drdy = handler;
 	if ((handler == NULL) || (status < 0)) {
@@ -106,12 +111,25 @@ static int lis2dh_start_trigger_int1(const struct device *dev)
 		return status;
 	}
 
+#if defined(CONFIG_LIS2DH_FIFO_MODE)
+	status = lis2dh->hw_tf->update_reg(dev, LIS2DH_REG_CTRL5,
+					   LIS2DH_FIFO_EN, LIS2DH_FIFO_EN);
+	if (unlikely(status < 0)) {
+		return status;
+	}
+
+	return lis2dh->hw_tf->write_reg(dev, LIS2DH_FIFO_CTRL_REG,
+					  LIS2DH_FIFO_CTRL_TR_INT1 |
+					  LIS2DH_FIFO_CTRL_MODE_STREAM |
+					  LIS2DH_FIFO_CTRL_FTH(31));
+#else
 	return lis2dh->hw_tf->update_reg(dev, LIS2DH_REG_CTRL3,
 					 LIS2DH_EN_DRDY1_INT1,
 					 LIS2DH_EN_DRDY1_INT1);
+#endif
 }
 
-#define LIS2DH_ANYM_CFG (LIS2DH_INT_CFG_ZHIE_ZUPE | LIS2DH_INT_CFG_YHIE_YUPE |\
+#define LIS2DH_ANYM_CFG (LIS2DH_INT_CFG_ZHIE_ZUPE | LIS2DH_INT_CFG_YHIE_YUPE | \
 			 LIS2DH_INT_CFG_XHIE_XUPE)
 
 static inline void setup_int2(const struct device *dev,
@@ -512,8 +530,9 @@ check_gpio_int:
 					   LIS2DH_EN_INT2_INT2);
 
 	/* latch int2 line interrupt */
-	status = lis2dh->hw_tf->write_reg(dev, LIS2DH_REG_CTRL5,
-					  LIS2DH_EN_LIR_INT2);
+	status = lis2dh->hw_tf->update_reg(dev, LIS2DH_REG_CTRL5,
+					   LIS2DH_EN_LIR_INT2,
+					   LIS2DH_EN_LIR_INT2);
 	if (status < 0) {
 		LOG_ERR("INT2 latch enable reg write failed (%d)", status);
 		return status;
