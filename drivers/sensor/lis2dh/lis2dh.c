@@ -18,12 +18,6 @@ LOG_MODULE_REGISTER(lis2dh, CONFIG_SENSOR_LOG_LEVEL);
 #define ACCEL_SCALE(sensitivity)			\
 	((SENSOR_G * (sensitivity) >> 14) / 100)
 
-
-// FIXME: put in device context
-static uint8_t fifo_buffer[6*32 + 1];
-static uint32_t fifo_cursor;
-
-
 /*
  * Use values for low-power mode in DS "Mechanical (Sensor) characteristics",
  * multiplied by 100.
@@ -60,15 +54,15 @@ static int lis2dh_channel_get(const struct device *dev,
 	int ofs_end;
 	int i;
 
-	if (fifo_cursor >= sizeof(fifo_buffer)) {
-		LOG_ERR("NO DATA");
+
+#if defined(CONFIG_LIS2DH_FIFO_MODE)
+	if (lis2dh->fifo_cursor >= sizeof(lis2dh->fifo_buf)) {
+		LOG_ERR("No data!");
 		return -ENODATA;
 	}
-
-	if (IS_ENABLED(CONFIG_LIS2DH_FIFO_MODE)) {
-		memcpy(lis2dh->sample.xyz, fifo_buffer + fifo_cursor, 6);
-		fifo_cursor += 6;
-	}
+	memcpy(lis2dh->sample.xyz, lis2dh->fifo_buf + lis2dh->fifo_cursor, 6);
+	lis2dh->fifo_cursor += 6;
+#endif
 
 	switch (chan) {
 	case SENSOR_CHAN_ACCEL_X:
@@ -106,7 +100,11 @@ static int lis2dh_sample_fetch(const struct device *dev,
 
 #if defined(CONFIG_LIS2DH_FIFO_MODE)
 	uint8_t fifo_src, fifo_n;
-	LOG_INF("cursor = %u", fifo_cursor);
+
+	if (lis2dh->fifo_cursor > LIS2DH_FIFO_SZ) {
+		LOG_WRN("driver buffer overrun!");
+	}
+
 	status = lis2dh->hw_tf->read_reg(dev, LIS2DH_FIFO_SRC_REG, &fifo_src);
 	if (status < 0) {
 		LOG_WRN("Could not read FIFO_SRC reg");
@@ -118,17 +116,17 @@ static int lis2dh_sample_fetch(const struct device *dev,
 	}
 
 	fifo_n = 1 + (fifo_src & LIS2DH_FIFO_SRC_N_MASK);
-	status = lis2dh->hw_tf->read_data(dev, LIS2DH_REG_STATUS,
-					  fifo_buffer, // FIXME: <-
-					  1 + fifo_n * 6);
+	status = lis2dh->hw_tf->read_data(dev, LIS2DH_REG_ACCEL_X_LSB,
+					  lis2dh->fifo_buf,
+					  fifo_n * 6);
 	if (status < 0) {
 		LOG_WRN("Could not read accel axis data");
 		return status;
 	}
 
-	fifo_cursor = 1;
+	lis2dh->fifo_cursor = 0;
 
-	LOG_HEXDUMP_DBG(fifo_buffer, 1 + 6*fifo_n, "status+FIFO");
+	LOG_HEXDUMP_DBG(lis2dh->fifo_buf, 1 + 6*fifo_n, "status+FIFO");
 
 	return 0;
 

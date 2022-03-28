@@ -15,6 +15,7 @@
 #include <drivers/sensor.h>
 #include <string.h>
 
+#define LIS2DH_FIFO_SZ			(32 * 6)
 #define LIS2DH_REG_WAI			0x0f
 #define LIS2DH_CHIP_ID			0x33
 
@@ -266,6 +267,11 @@ struct lis2dh_data {
 #endif
 
 #endif /* CONFIG_LIS2DH_TRIGGER */
+
+#if defined(CONFIG_LIS2DH_FIFO_MODE)
+	uint8_t fifo_buf[LIS2DH_FIFO_SZ];
+	size_t fifo_cursor;
+#endif /* CONFIG_LIS2DH_FIFO_MODE */
 
 #if DT_ANY_INST_ON_BUS_STATUS_OKAY(spi)
 	struct spi_cs_control cs_ctrl;
