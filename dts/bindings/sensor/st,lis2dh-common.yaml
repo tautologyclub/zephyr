@@ -25,3 +25,14 @@ properties:
         Indicates that the device driver should use interrupt 1
         for any movement. This is for boards that only have one
         interrupt line connected from the sensor to the processor.
+
+    use-hw-fifo:
+      type: boolean
+      required: false
+      description: |
+        Indicates that the accelerometer should not trigger DRDY
+        interrupts until internal hardware FIFO is filled with 32
+        samples. If enabled, the registered DATA_READY handler will
+        be called thirty-two times in short succession. For this
+        reason, it is recommended to pair this option with
+        CONFIG_LIS2DH_TRIGGER_OWN_THREAD=y.

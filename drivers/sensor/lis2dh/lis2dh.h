@@ -238,6 +238,7 @@ struct lis2dh_config {
 		bool is_lsm303agr_dev : 1;
 		bool disc_pull_up : 1;
 		bool anym_on_int1 : 1;
+		bool use_hw_fifo : 1;
 	} hw;
 #ifdef CONFIG_LIS2DH_MEASURE_TEMPERATURE
 	const struct temperature temperature;

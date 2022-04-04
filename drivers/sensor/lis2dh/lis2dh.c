@@ -538,6 +538,9 @@ static int lis2dh_pm_action(const struct device *dev,
 #define ANYM_ON_INT1(inst) \
 	DT_INST_PROP(inst, anym_on_int1)
 
+#define USE_HW_FIFO(inst) \
+	DT_INST_PROP(inst, use_hw_fifo)
+
 #ifdef CONFIG_LIS2DH_TRIGGER
 #define GPIO_DT_SPEC_INST_GET_BY_IDX_COND(id, prop, idx)		\
 	COND_CODE_1(DT_INST_PROP_HAS_IDX(id, prop, idx),		\
@@ -590,9 +593,10 @@ static int lis2dh_pm_action(const struct device *dev,
 					SPI_MODE_CPOL |			\
 					SPI_MODE_CPHA,			\
 					0) },				\
-		.hw = { .is_lsm303agr_dev = IS_LSM303AGR_DEV(inst),		\
-				.disc_pull_up = DISC_PULL_UP(inst),				\
-				.anym_on_int1 = ANYM_ON_INT1(inst), },			\
+		.hw = { .is_lsm303agr_dev = IS_LSM303AGR_DEV(inst),	\
+			.use_hw_fifo = USE_HW_FIFO(inst),		\
+			.disc_pull_up = DISC_PULL_UP(inst),		\
+			.anym_on_int1 = ANYM_ON_INT1(inst), },		\
 		LIS2DH_CFG_TEMPERATURE(inst)				\
 		LIS2DH_CFG_INT(inst)					\
 	}
@@ -611,9 +615,10 @@ static int lis2dh_pm_action(const struct device *dev,
 	{								\
 		.bus_init = lis2dh_i2c_init,				\
 		.bus_cfg = { .i2c = I2C_DT_SPEC_INST_GET(inst), },	\
-		.hw = { .is_lsm303agr_dev = IS_LSM303AGR_DEV(inst),		\
-				.disc_pull_up = DISC_PULL_UP(inst),			\
-				.anym_on_int1 = ANYM_ON_INT1(inst), },		\
+		.hw = { .is_lsm303agr_dev = IS_LSM303AGR_DEV(inst),	\
+				.use_hw_fifo = USE_HW_FIFO(inst),	\
+				.disc_pull_up = DISC_PULL_UP(inst),	\
+				.anym_on_int1 = ANYM_ON_INT1(inst), },	\
 		LIS2DH_CFG_TEMPERATURE(inst)				\
 		LIS2DH_CFG_INT(inst)					\
 	}
