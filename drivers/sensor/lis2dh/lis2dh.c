@@ -94,18 +94,24 @@ static int lis2dh_channel_get(const struct device *dev,
 			      struct sensor_value *val)
 {
 	struct lis2dh_data *lis2dh = dev->data;
+	const struct lis2dh_config *cfg = dev->config;
+
 	int ofs_start;
 	int ofs_end;
 	int i;
 
-#if defined(CONFIG_LIS2DH_FIFO_MODE)
-	int ret;
+	if (cfg->hw.use_hw_fifo && chan != SENSOR_CHAN_DIE_TEMP) {
+		size_t cur;
 
-	ret = ring_buf_get(&lis2dh->fifo_rb, lis2dh->sample.xyz, 6);
-	if (ret != 6) {
-		return -ENODATA;
+		if (lis2dh->fifo_len == 0) {
+			return -ENODATA;
+		}
+
+		cur = sizeof(lis2dh->fifo_buf) - lis2dh->fifo_len;
+		memcpy(lis2dh->sample.xyz, &lis2dh->fifo_buf[cur], 6);
+
+		lis2dh->fifo_len -= 6;
 	}
-#endif
 
 	switch (chan) {
 	case SENSOR_CHAN_ACCEL_X:
@@ -141,39 +147,41 @@ static int lis2dh_fetch_xyz(const struct device *dev,
 			       enum sensor_channel chan)
 {
 	struct lis2dh_data *lis2dh = dev->data;
+	const struct lis2dh_config *cfg = dev->config;
 	int status = -ENODATA;
 	size_t i;
 
-#if defined(CONFIG_LIS2DH_FIFO_MODE)
-	static uint8_t buf[LIS2DH_FIFO_SZ];
-	uint8_t fifo_src, bytes_in_fifo;
+	if (cfg->hw.use_hw_fifo) {
+		uint8_t fifo_src, bytes_in_fifo;
 
-	status = lis2dh->hw_tf->read_reg(dev, LIS2DH_FIFO_SRC_REG, &fifo_src);
-	if (status < 0) {
-		LOG_WRN("Could not read FIFO_SRC reg");
-		return status;
+		/* cursor gets decremented by each lis2dh_channel_get() */
+		if (lis2dh->fifo_len) {
+			return 0;
+		}
+
+		status = lis2dh->hw_tf->read_reg(dev, LIS2DH_FIFO_SRC_REG,
+						 &fifo_src);
+		if (status < 0) {
+			LOG_WRN("Could not read FIFO_SRC reg");
+			return status;
+		}
+
+		if (fifo_src & LIS2DH_FIFO_SRC_EMPTY) {
+			return -ENODATA;
+		}
+
+		bytes_in_fifo = ((fifo_src & LIS2DH_FIFO_SRC_N_MASK) + 1) * 6;
+		status = lis2dh->hw_tf->read_data(dev, LIS2DH_REG_ACCEL_X_LSB,
+						  lis2dh->fifo_buf, bytes_in_fifo);
+		if (status < 0) {
+			LOG_WRN("Could not read accel axis data");
+			return status;
+		}
+
+		lis2dh->fifo_len = bytes_in_fifo;
+
+		return 0;
 	}
-
-	if (fifo_src & LIS2DH_FIFO_SRC_EMPTY) {
-		return -ENODATA;
-	}
-
-	bytes_in_fifo = ((fifo_src & LIS2DH_FIFO_SRC_N_MASK) + 1) * 6;
-	status = lis2dh->hw_tf->read_data(dev, LIS2DH_REG_ACCEL_X_LSB,
-					  buf, bytes_in_fifo);
-	if (status < 0) {
-		LOG_WRN("Could not read accel axis data");
-		return status;
-	}
-
-	status = ring_buf_put(&lis2dh->fifo_rb, buf, bytes_in_fifo);
-	if (status < bytes_in_fifo) {
-		LOG_ERR("Couldn't fit data in ring buf");
-		return -ENOSPC;
-	}
-
-	return 0;
-#else
 
 	/*
 	 * since status and all accel data register addresses are consecutive,
@@ -199,7 +207,6 @@ static int lis2dh_fetch_xyz(const struct device *dev,
 	}
 
 	return status;
-#endif /* CONFIG_LIS2DH_FIFO_MODE */
 }
 
 static int lis2dh_sample_fetch(const struct device *dev,

@@ -270,6 +270,9 @@ struct lis2dh_data {
 	struct sensor_value temperature;
 #endif
 
+	uint8_t fifo_buf[32 * 6];
+	size_t fifo_len;
+
 #ifdef CONFIG_PM_DEVICE
 	uint8_t reg_ctrl1_active_val;
 #endif
@@ -293,11 +296,6 @@ struct lis2dh_data {
 #endif
 
 #endif /* CONFIG_LIS2DH_TRIGGER */
-
-#if defined(CONFIG_LIS2DH_FIFO_MODE)
-	struct ring_buf fifo_rb;
-	uint8_t rb_storage[LIS2DH_FIFO_RB_SZ];
-#endif /* CONFIG_LIS2DH_FIFO_MODE */
 
 #if DT_ANY_INST_ON_BUS_STATUS_OKAY(spi)
 	struct spi_cs_control cs_ctrl;

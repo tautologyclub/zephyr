@@ -47,13 +47,13 @@ static int lis2dh_trigger_drdy_set(const struct device *dev,
 	/* cancel potentially pending trigger */
 	atomic_clear_bit(&lis2dh->trig_flags, TRIGGED_INT1);
 
-#if defined(CONFIG_LIS2DH_FIFO_MODE)
-	status = lis2dh->hw_tf->update_reg(dev, LIS2DH_REG_CTRL3,
-					   LIS2DH_EN_WTM_INT1, 0);
-#else
-	status = lis2dh->hw_tf->update_reg(dev, LIS2DH_REG_CTRL3,
-					   LIS2DH_EN_DRDY1_INT1, 0);
-#endif
+	if (cfg->hw.use_hw_fifo) {
+		status = lis2dh->hw_tf->update_reg(dev, LIS2DH_REG_CTRL3,
+						   LIS2DH_EN_WTM_INT1, 0);
+	} else {
+		status = lis2dh->hw_tf->update_reg(dev, LIS2DH_REG_CTRL3,
+						   LIS2DH_EN_DRDY1_INT1, 0);
+	}
 
 	lis2dh->handler_drdy = handler;
 	if ((handler == NULL) || (status < 0)) {
@@ -81,6 +81,7 @@ static int lis2dh_start_trigger_int1(const struct device *dev)
 	uint8_t raw[LIS2DH_BUF_SZ];
 	uint8_t ctrl1 = 0U;
 	struct lis2dh_data *lis2dh = dev->data;
+	const struct lis2dh_config *cfg = dev->config;
 
 	/* power down temporarily to align interrupt & data output sampling */
 	status = lis2dh->hw_tf->read_reg(dev, LIS2DH_REG_CTRL1, &ctrl1);
@@ -111,30 +112,29 @@ static int lis2dh_start_trigger_int1(const struct device *dev)
 		return status;
 	}
 
-#if defined(CONFIG_LIS2DH_FIFO_MODE)
-	status = lis2dh->hw_tf->write_reg(dev, LIS2DH_REG_CTRL3,
-					  LIS2DH_EN_WTM_INT1);
-	if (status < 0) {
-		LOG_ERR("Couldn't enable watermark int");
-		return status;
-	}
-	ring_buf_init(&lis2dh->fifo_rb, sizeof(lis2dh->rb_storage),
-		      lis2dh->rb_storage);
-	status = lis2dh->hw_tf->update_reg(dev, LIS2DH_REG_CTRL5,
-					   LIS2DH_FIFO_EN, LIS2DH_FIFO_EN);
-	if (unlikely(status < 0)) {
-		return status;
+	if (cfg->hw.use_hw_fifo) {
+		status = lis2dh->hw_tf->write_reg(dev, LIS2DH_REG_CTRL3,
+						  LIS2DH_EN_WTM_INT1);
+		if (status < 0) {
+			LOG_ERR("Couldn't enable watermark int");
+			return status;
+		}
+		status = lis2dh->hw_tf->update_reg(dev, LIS2DH_REG_CTRL5,
+						   LIS2DH_FIFO_EN,
+						   LIS2DH_FIFO_EN);
+		if (unlikely(status < 0)) {
+			return status;
+		}
+
+		return lis2dh->hw_tf->write_reg(dev, LIS2DH_FIFO_CTRL_REG,
+						LIS2DH_FIFO_CTRL_TR_INT1 |
+						LIS2DH_FIFO_CTRL_MODE_STREAM |
+						LIS2DH_FIFO_CTRL_FTH(31));
 	}
 
-	return lis2dh->hw_tf->write_reg(dev, LIS2DH_FIFO_CTRL_REG,
-					  LIS2DH_FIFO_CTRL_TR_INT1 |
-					  LIS2DH_FIFO_CTRL_MODE_STREAM |
-					  LIS2DH_FIFO_CTRL_FTH(31));
-#else
 	return lis2dh->hw_tf->update_reg(dev, LIS2DH_REG_CTRL3,
 					 LIS2DH_EN_DRDY1_INT1,
 					 LIS2DH_EN_DRDY1_INT1);
-#endif
 }
 
 #define LIS2DH_ANYM_CFG (LIS2DH_INT_CFG_ZHIE_ZUPE | LIS2DH_INT_CFG_YHIE_YUPE |\
@@ -370,6 +370,13 @@ static void lis2dh_thread_cb(const struct device *dev)
 		if (likely(lis2dh->handler_drdy != NULL)) {
 			lis2dh->handler_drdy(dev, &drdy_trigger);
 
+			/* In FIFO mode, handler needs to be called until all
+			 * buffered samples are read out
+			 */
+			while (cfg->hw.use_hw_fifo && lis2dh->fifo_len) {
+				LOG_WRN("fifo_len = %u", lis2dh->fifo_len);
+				lis2dh->handler_drdy(dev, &drdy_trigger);
+			}
 		}
 
 		/* Reactivate level triggered interrupt if handler did not
