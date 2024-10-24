@@ -1,8 +1,7 @@
-# Kconfig.nrf5 - nRF5 entropy generator driver configuration
-#
+# nRF5 entropy generator driver configuration
+
 # Copyright (c) 2018 Nordic Semiconductor ASA
 # Copyright (c) 2017 Exati Tecnologia Ltda.
-#
 # SPDX-License-Identifier: Apache-2.0
 
 config ENTROPY_NRF_FORCE_ALT
@@ -12,13 +11,12 @@ config ENTROPY_NRF_FORCE_ALT
 	  This option can be enabled to force an alternative implementation
 	  of the entropy driver.
 
-if !ENTROPY_NRF_FORCE_ALT
-
 menuconfig ENTROPY_NRF5_RNG
 	bool "nRF5 RNG driver"
-	depends on SOC_COMPATIBLE_NRF
-	select ENTROPY_HAS_DRIVER
 	default y
+	depends on !ENTROPY_NRF_FORCE_ALT
+	depends on DT_HAS_NORDIC_NRF_RNG_ENABLED
+	select ENTROPY_HAS_DRIVER
 	help
 	  This option enables the RNG peripheral, which is a random number
 	  generator, based on internal thermal noise, that provides a
@@ -27,7 +25,7 @@ menuconfig ENTROPY_NRF5_RNG
 if ENTROPY_NRF5_RNG
 
 config ENTROPY_NRF5_BIAS_CORRECTION
-	bool "Enable bias correction (uniform distribution)"
+	bool "Bias correction (uniform distribution)"
 	help
 	  This option enables the RNG bias correction, which guarantees a
 	  uniform distribution of 0 and 1. When this option is enabled, the time
@@ -44,7 +42,7 @@ config ENTROPY_NRF5_THR_POOL_SIZE
 
 config ENTROPY_NRF5_THR_THRESHOLD
 	int "Thread-mode random number pool low-water threshold"
-	range 4 255
+	range 4 $(UINT8_MAX)
 	help
 	  Low water-mark threshold in bytes to trigger entropy generation for
 	  thread mode consumers. As soon as the number of available bytes in the
@@ -62,22 +60,11 @@ config ENTROPY_NRF5_ISR_POOL_SIZE
 
 config ENTROPY_NRF5_ISR_THRESHOLD
 	int "ISR-mode random number pool low-water threshold"
-	range 12 255
+	range 12 $(UINT8_MAX)
 	help
 	  Low water-mark threshold in bytes to trigger entropy generation for
 	  ISR consumers. As soon as the number of available bytes in the
 	  buffer goes below this number hardware entropy generation will be
 	  started.
 
-config ENTROPY_NRF5_PRI
-	int "RNG interrupt priority"
-	range 0 2 if SOC_SERIES_NRF51X
-	range 0 5 if SOC_COMPATIBLE_NRF52X
-	default 2 if SOC_SERIES_NRF51X
-	default 5 if SOC_COMPATIBLE_NRF52X
-	help
-	  nRF5X RNG IRQ priority.
-
 endif # ENTROPY_NRF5_RNG
-
-endif # !ENTROPY_NRF_FORCE_ALT

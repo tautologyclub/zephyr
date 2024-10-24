@@ -5,29 +5,27 @@
  */
 
 #include <string.h>
-#include <posix/unistd.h>
+#include <fcntl.h>
+#include <zephyr/posix/unistd.h>
 #include "test_fs.h"
 
 const char test_str[] = "hello world!";
-int file;
+int file = -1;
 
 static int test_file_open(void)
 {
 	int res;
 
-	TC_PRINT("\nOpen tests:\n");
-
-	res = open(TEST_FILE, O_RDWR);
+	res = open(TEST_FILE, O_CREAT | O_RDWR, 0660);
 	if (res < 0) {
-		TC_PRINT("Failed opening file [%d]\n", res);
-		return res;
+		TC_ERROR("Failed opening file: %d, errno=%d\n", res, errno);
+		/* FIXME: restructure tests as per #46897 */
+		__ASSERT_NO_MSG(res >= 0);
 	}
 
 	file = res;
 
-	TC_PRINT("Opened file %s\n", TEST_FILE);
-
-	return 0;
+	return TC_PASS;
 }
 
 int test_file_write(void)
@@ -35,21 +33,19 @@ int test_file_write(void)
 	ssize_t brw;
 	off_t res;
 
-	TC_PRINT("\nWrite tests:\n");
-
 	res = lseek(file, 0, SEEK_SET);
 	if (res != 0) {
 		TC_PRINT("lseek failed [%d]\n", (int)res);
 		close(file);
+		file = -1;
 		return TC_FAIL;
 	}
-
-	TC_PRINT("Data written:\"%s\"\n\n", test_str);
 
 	brw = write(file, (char *)test_str, strlen(test_str));
 	if (brw < 0) {
 		TC_PRINT("Failed writing to file [%d]\n", (int)brw);
 		close(file);
+		file = -1;
 		return TC_FAIL;
 	}
 
@@ -57,10 +53,9 @@ int test_file_write(void)
 		TC_PRINT("Unable to complete write. Volume full.\n");
 		TC_PRINT("Number of bytes written: [%d]\n", (int)brw);
 		close(file);
+		file = -1;
 		return TC_FAIL;
 	}
-
-	TC_PRINT("Data successfully written!\n");
 
 	return res;
 }
@@ -72,12 +67,11 @@ static int test_file_read(void)
 	char read_buff[80];
 	size_t sz = strlen(test_str);
 
-	TC_PRINT("\nRead tests:\n");
-
 	res = lseek(file, 0, SEEK_SET);
 	if (res != 0) {
 		TC_PRINT("lseek failed [%d]\n", (int)res);
 		close(file);
+		file = -1;
 		return TC_FAIL;
 	}
 
@@ -85,12 +79,11 @@ static int test_file_read(void)
 	if (brw < 0) {
 		TC_PRINT("Failed reading file [%d]\n", (int)brw);
 		close(file);
+		file = -1;
 		return TC_FAIL;
 	}
 
 	read_buff[brw] = 0;
-
-	TC_PRINT("Data read:\"%s\"\n", read_buff);
 
 	if (strcmp(test_str, read_buff)) {
 		TC_PRINT("Error - Data read does not match data written\n");
@@ -101,9 +94,10 @@ static int test_file_read(void)
 	/* Now test after non-zero lseek. */
 
 	res = lseek(file, 2, SEEK_SET);
-	if (res != 0) {
+	if (res != 2) {
 		TC_PRINT("lseek failed [%d]\n", (int)res);
 		close(file);
+		file = -1;
 		return TC_FAIL;
 	}
 
@@ -111,6 +105,7 @@ static int test_file_read(void)
 	if (brw < 0) {
 		TC_PRINT("Failed reading file [%d]\n", (int)brw);
 		close(file);
+		file = -1;
 		return TC_FAIL;
 	}
 
@@ -119,33 +114,90 @@ static int test_file_read(void)
 
 	read_buff[brw] = 0;
 
-	TC_PRINT("Data read:\"%s\"\n", read_buff);
-
 	if (strcmp(test_str + 2, read_buff)) {
 		TC_PRINT("Error - Data read does not match data written\n");
 		TC_PRINT("Data read:\"%s\"\n\n", read_buff);
 		return TC_FAIL;
 	}
 
-	TC_PRINT("\nData read matches data written\n");
-
-	return res;
+	return TC_PASS;
 }
 
 static int test_file_close(void)
 {
-	int res;
+	int res = 0;
 
-	TC_PRINT("\nClose tests:\n");
+	if (file >= 0) {
+		res = close(file);
+		if (res < 0) {
+			TC_ERROR("Failed closing file: %d, errno=%d\n", res, errno);
+			/* FIXME: restructure tests as per #46897 */
+			__ASSERT_NO_MSG(res == 0);
+		}
 
-	res = close(file);
-	if (res) {
-		TC_PRINT("Error closing file [%d]\n", res);
+		file = -1;
+	}
+
+	return res;
+}
+
+static int test_file_fsync(void)
+{
+	int res = 0;
+
+	if (file < 0) {
 		return res;
 	}
 
-	TC_PRINT("Closed file %s\n", TEST_FILE);
+	res = fsync(file);
+	if (res < 0) {
+		TC_ERROR("Failed to sync file: %d, errno = %d\n", res, errno);
+		res = TC_FAIL;
+	}
 
+	close(file);
+	file = -1;
+	return res;
+}
+
+#ifdef CONFIG_POSIX_SYNCHRONIZED_IO
+static int test_file_fdatasync(void)
+{
+	int res = 0;
+
+	if (file < 0) {
+		return res;
+	}
+
+	res = fdatasync(file);
+	if (res < 0) {
+		TC_ERROR("Failed to sync file: %d, errno = %d\n", res, errno);
+		res = TC_FAIL;
+	}
+
+	close(file);
+	file = -1;
+	return res;
+}
+#endif /* CONFIG_POSIX_SYNCHRONIZED_IO */
+
+static int test_file_truncate(void)
+{
+	int res = 0;
+	size_t truncate_size = sizeof(test_str) - 4;
+
+	if (file < 0) {
+		return res;
+	}
+
+	res = ftruncate(file, truncate_size);
+	if (res) {
+		TC_PRINT("Error truncating file [%d]\n", res);
+		res = TC_FAIL;
+	}
+
+	close(file);
+	file = -1;
 	return res;
 }
 
@@ -153,27 +205,35 @@ static int test_file_delete(void)
 {
 	int res;
 
-	TC_PRINT("\nDelete tests:\n");
-
 	res = unlink(TEST_FILE);
 	if (res) {
 		TC_PRINT("Error deleting file [%d]\n", res);
 		return res;
 	}
 
-	TC_PRINT("File (%s) deleted successfully!\n", TEST_FILE);
-
 	return res;
 }
+
+static void after_fn(void *unused)
+{
+	ARG_UNUSED(unused);
+
+	test_file_close();
+	unlink(TEST_FILE);
+}
+
+ZTEST_SUITE(posix_fs_file_test, NULL, test_mount, NULL, after_fn,
+	    test_unmount);
 
 /**
  * @brief Test for POSIX open API
  *
  * @details Test opens new file through POSIX open API.
  */
-void test_fs_open(void)
+ZTEST(posix_fs_file_test, test_fs_open)
 {
-	zassert_true(test_file_open() == TC_PASS, NULL);
+	/* FIXME: restructure tests as per #46897 */
+	zassert_true(test_file_open() == TC_PASS);
 }
 
 /**
@@ -181,9 +241,11 @@ void test_fs_open(void)
  *
  * @details Test writes some data through POSIX write API.
  */
-void test_fs_write(void)
+ZTEST(posix_fs_file_test, test_fs_write)
 {
-	zassert_true(test_file_write() == TC_PASS, NULL);
+	/* FIXME: restructure tests as per #46897 */
+	zassert_true(test_file_open() == TC_PASS);
+	zassert_true(test_file_write() == TC_PASS);
 }
 
 /**
@@ -191,9 +253,55 @@ void test_fs_write(void)
  *
  * @details Test reads data back through POSIX read API.
  */
-void test_fs_read(void)
+ZTEST(posix_fs_file_test, test_fs_read)
 {
-	zassert_true(test_file_read() == TC_PASS, NULL);
+	/* FIXME: restructure tests as per #46897 */
+	zassert_true(test_file_open() == TC_PASS);
+	zassert_true(test_file_write() == TC_PASS);
+	zassert_true(test_file_read() == TC_PASS);
+}
+
+/**
+ * @brief Test for POSIX fsync API
+ *
+ * @details Test sync the file through POSIX fsync API.
+ */
+ZTEST(posix_fs_file_test, test_fs_sync)
+{
+	/* FIXME: restructure tests as per #46897 */
+	zassert_true(test_file_open() == TC_PASS);
+	zassert_true(test_file_write() == TC_PASS);
+	zassert_true(test_file_fsync() == TC_PASS);
+}
+
+/**
+ * @brief Test for POSIX fdatasync API
+ *
+ * @details Test sync the file through POSIX fdatasync API.
+ */
+ZTEST(posix_fs_file_test, test_fs_datasync)
+{
+#ifdef CONFIG_POSIX_SYNCHRONIZED_IO
+	/* FIXME: restructure tests as per #46897 */
+	zassert_true(test_file_open() == TC_PASS);
+	zassert_true(test_file_write() == TC_PASS);
+	zassert_true(test_file_fdatasync() == TC_PASS);
+#else
+	ztest_test_skip();
+#endif
+}
+
+/**
+ * @brief Test for POSIX ftruncate API
+ *
+ * @details Test truncate the file through POSIX ftruncate API.
+ */
+ZTEST(posix_fs_file_test, test_fs_truncate)
+{
+	/* FIXME: restructure tests as per #46897 */
+	zassert_true(test_file_open() == TC_PASS);
+	zassert_true(test_file_write() == TC_PASS);
+	zassert_true(test_file_truncate() == TC_PASS);
 }
 
 /**
@@ -201,9 +309,11 @@ void test_fs_read(void)
  *
  * @details Test closes the open file through POSIX close API.
  */
-void test_fs_close(void)
+ZTEST(posix_fs_file_test, test_fs_close)
 {
-	zassert_true(test_file_close() == TC_PASS, NULL);
+	/* FIXME: restructure tests as per #46897 */
+	zassert_true(test_file_open() == TC_PASS);
+	zassert_true(test_file_close() == TC_PASS);
 }
 
 /**
@@ -211,7 +321,41 @@ void test_fs_close(void)
  *
  * @details Test deletes a file through POSIX unlink API.
  */
-void test_fs_unlink(void)
+ZTEST(posix_fs_file_test, test_fs_unlink)
 {
-	zassert_true(test_file_delete() == TC_PASS, NULL);
+	zassert_true(test_file_open() == TC_PASS);
+	zassert_true(test_file_delete() == TC_PASS);
+}
+
+ZTEST(posix_fs_file_test, test_fs_fd_leak)
+{
+	const int reps =
+	    MAX(CONFIG_POSIX_OPEN_MAX, CONFIG_ZVFS_OPEN_MAX) + 5;
+
+	for (int i = 0; i < reps; i++) {
+		if (i > 0) {
+			zassert_true(test_file_open() == TC_PASS);
+		}
+
+		if (i < reps - 1) {
+			zassert_true(test_file_close() == TC_PASS);
+		}
+	}
+}
+
+ZTEST(posix_fs_file_test, test_file_open_truncate)
+{
+	struct stat buf = {0};
+
+	zassert_ok(test_file_open());
+	zassert_ok(test_file_write());
+	zassert_ok(test_file_close());
+	file = open(TEST_FILE, O_RDWR | O_TRUNC);
+	zassert_not_equal(file, -1,
+			  "File open failed for truncate mode");
+
+	zassert_ok(test_file_close());
+	zassert_ok(stat(TEST_FILE, &buf));
+	zassert_equal(buf.st_size, 0, "Error: file is not truncated");
+	zassert_ok(test_file_delete());
 }

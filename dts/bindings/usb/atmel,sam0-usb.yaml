@@ -1,26 +1,15 @@
----
-title: Atmel SAM0 USB device
-version: 0.1
-
-description: >
+description: |
     Atmel SAM0 USB in device mode
 
-inherits:
-    !include usb-ep.yaml
+compatible: "atmel,sam0-usb"
+
+include:
+  - name: usb-ep.yaml
+  - name: pinctrl-device.yaml
 
 properties:
-    compatible:
-      constraint: "atmel,sam0-usb"
+  reg:
+    required: true
 
-    reg:
-      type: array
-      description: mmio register space
-      generation: define
-      category: required
-
-    interrupts:
-      type: array
-      category: required
-      description: required interrupts
-      generation: define
-...
+  interrupts:
+    required: true

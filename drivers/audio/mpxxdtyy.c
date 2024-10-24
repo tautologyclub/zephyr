@@ -4,22 +4,60 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#define DT_DRV_COMPAT st_mpxxdtyy
+
+#include <zephyr/devicetree.h>
+
 #include "mpxxdtyy.h"
 
 #define LOG_LEVEL CONFIG_AUDIO_DMIC_LOG_LEVEL
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(mpxxdtyy);
 
-u16_t sw_filter_lib_init(struct device *dev, struct dmic_cfg *cfg)
+#define CHANNEL_MASK	0x55
+
+static uint8_t ch_demux[128] = {
+  0x00, 0x01, 0x00, 0x01, 0x02, 0x03, 0x02, 0x03,
+  0x00, 0x01, 0x00, 0x01, 0x02, 0x03, 0x02, 0x03,
+  0x04, 0x05, 0x04, 0x05, 0x06, 0x07, 0x06, 0x07,
+  0x04, 0x05, 0x04, 0x05, 0x06, 0x07, 0x06, 0x07,
+  0x00, 0x01, 0x00, 0x01, 0x02, 0x03, 0x02, 0x03,
+  0x00, 0x01, 0x00, 0x01, 0x02, 0x03, 0x02, 0x03,
+  0x04, 0x05, 0x04, 0x05, 0x06, 0x07, 0x06, 0x07,
+  0x04, 0x05, 0x04, 0x05, 0x06, 0x07, 0x06, 0x07,
+  0x08, 0x09, 0x08, 0x09, 0x0a, 0x0b, 0x0a, 0x0b,
+  0x08, 0x09, 0x08, 0x09, 0x0a, 0x0b, 0x0a, 0x0b,
+  0x0c, 0x0d, 0x0c, 0x0d, 0x0e, 0x0f, 0x0e, 0x0f,
+  0x0c, 0x0d, 0x0c, 0x0d, 0x0e, 0x0f, 0x0e, 0x0f,
+  0x08, 0x09, 0x08, 0x09, 0x0a, 0x0b, 0x0a, 0x0b,
+  0x08, 0x09, 0x08, 0x09, 0x0a, 0x0b, 0x0a, 0x0b,
+  0x0c, 0x0d, 0x0c, 0x0d, 0x0e, 0x0f, 0x0e, 0x0f,
+  0x0c, 0x0d, 0x0c, 0x0d, 0x0e, 0x0f, 0x0e, 0x0f
+};
+
+static uint8_t left_channel(uint8_t a, uint8_t b)
 {
-	struct mpxxdtyy_data *const data = DEV_DATA(dev);
-	TPDMFilter_InitStruct *pdm_filter = &data->pdm_filter;
-	u16_t factor;
-	u32_t audio_freq = cfg->streams->pcm_rate;
+	return ch_demux[a & CHANNEL_MASK] | (ch_demux[b & CHANNEL_MASK] << 4);
+}
+
+static uint8_t right_channel(uint8_t a, uint8_t b)
+{
+	a >>= 1;
+	b >>= 1;
+	return ch_demux[a & CHANNEL_MASK] | (ch_demux[b & CHANNEL_MASK] << 4);
+}
+
+uint16_t sw_filter_lib_init(const struct device *dev, struct dmic_cfg *cfg)
+{
+	struct mpxxdtyy_data *const data = dev->data;
+	TPDMFilter_InitStruct *pdm_filter = &data->pdm_filter[0];
+	uint16_t factor;
+	uint32_t audio_freq = cfg->streams->pcm_rate;
+	int i;
 
 	/* calculate oversampling factor based on pdm clock */
 	for (factor = 64U; factor <= 128U; factor += 64U) {
-		u32_t pdm_bit_clk = (audio_freq * factor *
+		uint32_t pdm_bit_clk = (audio_freq * factor *
 				     cfg->channel.req_num_chan);
 
 		if (pdm_bit_clk >= cfg->io.min_pdm_clk_freq &&
@@ -32,16 +70,18 @@ u16_t sw_filter_lib_init(struct device *dev, struct dmic_cfg *cfg)
 		return 0;
 	}
 
-	/* init the filter lib */
-	pdm_filter->LP_HZ = audio_freq / 2U;
-	pdm_filter->HP_HZ = 10;
-	pdm_filter->Fs = audio_freq;
-	pdm_filter->Out_MicChannels = 1;
-	pdm_filter->In_MicChannels = 1;
-	pdm_filter->Decimation = factor;
-	pdm_filter->MaxVolume = 64;
+	for (i = 0; i < cfg->channel.req_num_chan; i++) {
+		/* init the filter lib */
+		pdm_filter[i].LP_HZ = audio_freq / 2U;
+		pdm_filter[i].HP_HZ = 10;
+		pdm_filter[i].Fs = audio_freq;
+		pdm_filter[i].Out_MicChannels = cfg->channel.req_num_chan;
+		pdm_filter[i].In_MicChannels = cfg->channel.req_num_chan;
+		pdm_filter[i].Decimation = factor;
+		pdm_filter[i].MaxVolume = 64;
 
-	Open_PDM_Filter_Init(pdm_filter);
+		Open_PDM_Filter_Init(&data->pdm_filter[i]);
+	}
 
 	return factor;
 }
@@ -50,57 +90,96 @@ int sw_filter_lib_run(TPDMFilter_InitStruct *pdm_filter,
 		      void *pdm_block, void *pcm_block,
 		      size_t pdm_size, size_t pcm_size)
 {
-	int i;
+	int i, j;
+	int pdm_offset;
+	uint8_t a, b;
 
 	if (pdm_block == NULL || pcm_block == NULL || pdm_filter == NULL) {
 		return -EINVAL;
 	}
 
 	for (i = 0; i < pdm_size/2; i++) {
-		((u16_t *)pdm_block)[i] = HTONS(((u16_t *)pdm_block)[i]);
+		switch (pdm_filter[0].In_MicChannels) {
+		case 1: /* MONO */
+			((uint16_t *)pdm_block)[i] = HTONS(((uint16_t *)pdm_block)[i]);
+			break;
+
+		case 2: /* STEREO */
+			if (pdm_filter[0].In_MicChannels > 1) {
+				a = ((uint8_t *)pdm_block)[2*i];
+				b = ((uint8_t *)pdm_block)[2*i + 1];
+
+				((uint8_t *)pdm_block)[2*i] = left_channel(a, b);
+				((uint8_t *)pdm_block)[2*i + 1] = right_channel(a, b);
+			}
+			break;
+
+		default:
+			return -EINVAL;
+		}
 	}
 
-	switch (pdm_filter->Decimation) {
-	case 64:
-		Open_PDM_Filter_64((u8_t *) pdm_block, pcm_block,
-				    pcm_size, pdm_filter);
-		break;
-	case 128:
-		Open_PDM_Filter_128((u8_t *) pdm_block, pcm_block,
-				    pcm_size, pdm_filter);
-		break;
-	default:
-		return -EINVAL;
+	for (j = 0; j < pcm_size / 2; j += pdm_filter[0].Fs / 1000) {
+		/*
+		 * The number of PDM bytes per PCM sample is the decimation factor
+		 * divided by the number of bits per byte (8). We need to skip a number of
+		 * PDM bytes equivalent to the number of PCM samples, times the number of
+		 * channels.
+		 */
+		pdm_offset = j * (pdm_filter[0].Decimation / 8) * pdm_filter[0].In_MicChannels;
+
+		for (i = 0; i < pdm_filter[0].In_MicChannels; i++) {
+			switch (pdm_filter[0].Decimation) {
+			case 64:
+				Open_PDM_Filter_64(&((uint8_t *) pdm_block)[pdm_offset + i],
+						&((uint16_t *) pcm_block)[j + i],
+						pdm_filter->MaxVolume,
+						&pdm_filter[i]);
+				break;
+
+			case 128:
+				Open_PDM_Filter_128(&((uint8_t *) pdm_block)[pdm_offset + i],
+						&((uint16_t *) pcm_block)[j + i],
+						pdm_filter->MaxVolume,
+						&pdm_filter[i]);
+				break;
+
+			default:
+				return -EINVAL;
+			}
+		}
 	}
 
 	return 0;
 }
 
 static const struct _dmic_ops mpxxdtyy_driver_api = {
-#ifdef DT_ST_MPXXDTYY_BUS_I2S
+#if DT_ANY_INST_ON_BUS_STATUS_OKAY(i2s)
 	.configure		= mpxxdtyy_i2s_configure,
 	.trigger		= mpxxdtyy_i2s_trigger,
 	.read			= mpxxdtyy_i2s_read,
-#endif /* DT_ST_MPXXDTYY_BUS_I2S */
+#endif /* DT_ANY_INST_ON_BUS_STATUS_OKAY(i2s) */
 };
 
-static int mpxxdtyy_initialize(struct device *dev)
+static int mpxxdtyy_initialize(const struct device *dev)
 {
-	struct mpxxdtyy_data *const data = DEV_DATA(dev);
+	const struct mpxxdtyy_config *config = dev->config;
+	struct mpxxdtyy_data *const data = dev->data;
 
-	data->comm_master = device_get_binding(DT_ST_MPXXDTYY_0_BUS_NAME);
-
-	if (data->comm_master == NULL) {
-		LOG_ERR("master %s not found", DT_ST_MPXXDTYY_0_BUS_NAME);
-		return -EINVAL;
+	if (!device_is_ready(config->comm_master)) {
+		return -ENODEV;
 	}
 
 	data->state = DMIC_STATE_INITIALIZED;
 	return 0;
 }
 
+static const struct mpxxdtyy_config mpxxdtyy_config = {
+	.comm_master = DEVICE_DT_GET(DT_INST_BUS(0)),
+};
+
 static struct mpxxdtyy_data mpxxdtyy_data;
 
-DEVICE_AND_API_INIT(mpxxdtyy, DT_ST_MPXXDTYY_0_LABEL, mpxxdtyy_initialize,
-		&mpxxdtyy_data, NULL, POST_KERNEL,
-		CONFIG_AUDIO_DMIC_INIT_PRIORITY, &mpxxdtyy_driver_api);
+DEVICE_DT_INST_DEFINE(0, mpxxdtyy_initialize, NULL, &mpxxdtyy_data,
+		      &mpxxdtyy_config, POST_KERNEL,
+		      CONFIG_AUDIO_DMIC_INIT_PRIORITY, &mpxxdtyy_driver_api);

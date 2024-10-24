@@ -1,60 +1,65 @@
 /*
- * Copyright (c) 2016-2018 Nordic Semiconductor ASA
+ * Copyright (c) 2016-2019 Nordic Semiconductor ASA
  * Copyright (c) 2016 Vinayak Kariappa Chettimada
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <zephyr/types.h>
 #include <soc.h>
+
+#include "hal/nrf5/swi.h"
 
 #include "util/memq.h"
 #include "util/mayfly.h"
 
-#define LOG_MODULE_NAME bt_ctlr_nrf5_mayfly
-#include "common/log.h"
+#include "ll_sw/lll.h"
+
 #include "hal/debug.h"
 
-#if defined(CONFIG_BT_LL_SW)
-#define MAYFLY_CALL_ID_WORKER MAYFLY_CALL_ID_0
-#define MAYFLY_CALL_ID_JOB    MAYFLY_CALL_ID_1
-#elif defined(CONFIG_BT_LL_SW_SPLIT)
-#include "ll_sw/lll.h"
 #define MAYFLY_CALL_ID_LLL    TICKER_USER_ID_LLL
 #define MAYFLY_CALL_ID_WORKER TICKER_USER_ID_ULL_HIGH
 #define MAYFLY_CALL_ID_JOB    TICKER_USER_ID_ULL_LOW
-#else
-#error Unknown LL variant.
-#endif
 
-void mayfly_enable_cb(u8_t caller_id, u8_t callee_id, u8_t enable)
-{
-	(void)caller_id;
-
-	LL_ASSERT(callee_id == MAYFLY_CALL_ID_JOB);
-
-	if (enable) {
-		irq_enable(SWI5_IRQn);
-	} else {
-		irq_disable(SWI5_IRQn);
-	}
-}
-
-u32_t mayfly_is_enabled(u8_t caller_id, u8_t callee_id)
+void mayfly_enable_cb(uint8_t caller_id, uint8_t callee_id, uint8_t enable)
 {
 	(void)caller_id;
 
 	switch (callee_id) {
-#if defined(CONFIG_BT_LL_SW_SPLIT)
-	case MAYFLY_CALL_ID_LLL:
-		return irq_is_enabled(SWI4_IRQn);
-#endif /* CONFIG_BT_LL_SW_SPLIT */
-
 	case MAYFLY_CALL_ID_WORKER:
-		return irq_is_enabled(RTC0_IRQn);
+		if (enable) {
+			irq_enable(HAL_SWI_WORKER_IRQ);
+		} else {
+			irq_disable(HAL_SWI_WORKER_IRQ);
+		}
+		break;
 
 	case MAYFLY_CALL_ID_JOB:
-		return irq_is_enabled(SWI5_IRQn);
+		if (enable) {
+			irq_enable(HAL_SWI_JOB_IRQ);
+		} else {
+			irq_disable(HAL_SWI_JOB_IRQ);
+		}
+		break;
+
+	default:
+		LL_ASSERT(0);
+		break;
+	}
+}
+
+uint32_t mayfly_is_enabled(uint8_t caller_id, uint8_t callee_id)
+{
+	(void)caller_id;
+
+	switch (callee_id) {
+	case MAYFLY_CALL_ID_LLL:
+		return irq_is_enabled(HAL_SWI_RADIO_IRQ);
+
+	case MAYFLY_CALL_ID_WORKER:
+		return irq_is_enabled(HAL_SWI_WORKER_IRQ);
+
+	case MAYFLY_CALL_ID_JOB:
+		return irq_is_enabled(HAL_SWI_JOB_IRQ);
 
 	default:
 		LL_ASSERT(0);
@@ -64,17 +69,17 @@ u32_t mayfly_is_enabled(u8_t caller_id, u8_t callee_id)
 	return 0;
 }
 
-u32_t mayfly_prio_is_equal(u8_t caller_id, u8_t callee_id)
+uint32_t mayfly_prio_is_equal(uint8_t caller_id, uint8_t callee_id)
 {
-	return (caller_id == callee_id) ||
-#if defined(CONFIG_BT_LL_SW)
-#if (CONFIG_BT_CTLR_WORKER_PRIO == CONFIG_BT_CTLR_JOB_PRIO)
-	       ((caller_id == MAYFLY_CALL_ID_WORKER) &&
-		(callee_id == MAYFLY_CALL_ID_JOB)) ||
-	       ((caller_id == MAYFLY_CALL_ID_JOB) &&
-		(callee_id == MAYFLY_CALL_ID_WORKER)) ||
-#endif
-#elif defined(CONFIG_BT_LL_SW_SPLIT)
+	return 0 ||
+#if defined(CONFIG_BT_CTLR_ZLI)
+		((caller_id != MAYFLY_CALL_ID_LLL) &&
+		 (callee_id != MAYFLY_CALL_ID_LLL) &&
+		 (caller_id == callee_id)) ||
+		((caller_id == MAYFLY_CALL_ID_LLL) &&
+		 (caller_id == callee_id)) ||
+#else /* !CONFIG_BT_CTLR_ZLI */
+		(caller_id == callee_id) ||
 #if (CONFIG_BT_CTLR_LLL_PRIO == CONFIG_BT_CTLR_ULL_HIGH_PRIO)
 	       ((caller_id == MAYFLY_CALL_ID_LLL) &&
 		(callee_id == MAYFLY_CALL_ID_WORKER)) ||
@@ -87,37 +92,40 @@ u32_t mayfly_prio_is_equal(u8_t caller_id, u8_t callee_id)
 	       ((caller_id == MAYFLY_CALL_ID_JOB) &&
 		(callee_id == MAYFLY_CALL_ID_LLL)) ||
 #endif
+#endif /* !CONFIG_BT_CTLR_ZLI */
 #if (CONFIG_BT_CTLR_ULL_HIGH_PRIO == CONFIG_BT_CTLR_ULL_LOW_PRIO)
 	       ((caller_id == MAYFLY_CALL_ID_WORKER) &&
 		(callee_id == MAYFLY_CALL_ID_JOB)) ||
 	       ((caller_id == MAYFLY_CALL_ID_JOB) &&
 		(callee_id == MAYFLY_CALL_ID_WORKER)) ||
 #endif
-#endif
 	       0;
 }
 
-void mayfly_pend(u8_t caller_id, u8_t callee_id)
+void mayfly_pend(uint8_t caller_id, uint8_t callee_id)
 {
 	(void)caller_id;
 
 	switch (callee_id) {
-#if defined(CONFIG_BT_LL_SW_SPLIT)
 	case MAYFLY_CALL_ID_LLL:
-		NVIC_SetPendingIRQ(SWI4_IRQn);
+		hal_swi_lll_pend();
 		break;
-#endif /* CONFIG_BT_LL_SW_SPLIT */
 
 	case MAYFLY_CALL_ID_WORKER:
-		NVIC_SetPendingIRQ(RTC0_IRQn);
+		hal_swi_worker_pend();
 		break;
 
 	case MAYFLY_CALL_ID_JOB:
-		NVIC_SetPendingIRQ(SWI5_IRQn);
+		hal_swi_job_pend();
 		break;
 
 	default:
 		LL_ASSERT(0);
 		break;
 	}
+}
+
+uint32_t mayfly_is_running(void)
+{
+	return k_is_in_isr();
 }

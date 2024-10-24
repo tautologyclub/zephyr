@@ -9,222 +9,313 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <errno.h>
+#include <limits.h>
+#include <zephyr/kernel.h>
 
-#include "settings/settings.h"
+#include <zephyr/settings/settings.h>
 #include "settings_priv.h"
 #include <zephyr/types.h>
-
-#include <logging/log.h>
+#include <zephyr/sys/iterable_sections.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(settings, CONFIG_SETTINGS_LOG_LEVEL);
 
+#if defined(CONFIG_SETTINGS_DYNAMIC_HANDLERS)
 sys_slist_t settings_handlers;
+#endif /* CONFIG_SETTINGS_DYNAMIC_HANDLERS */
 
-static u8_t settings_cmd_inited;
+K_MUTEX_DEFINE(settings_lock);
 
-static struct settings_handler *settings_handler_lookup(char *name);
+
 void settings_store_init(void);
 
 void settings_init(void)
 {
-	if (!settings_cmd_inited) {
-		sys_slist_init(&settings_handlers);
-		settings_store_init();
+#if defined(CONFIG_SETTINGS_DYNAMIC_HANDLERS)
+	sys_slist_init(&settings_handlers);
+#endif /* CONFIG_SETTINGS_DYNAMIC_HANDLERS */
+	settings_store_init();
+}
 
-		settings_cmd_inited = 1U;
+#if defined(CONFIG_SETTINGS_DYNAMIC_HANDLERS)
+int settings_register_with_cprio(struct settings_handler *handler, int cprio)
+{
+	int rc = 0;
+
+	STRUCT_SECTION_FOREACH(settings_handler_static, ch) {
+		if (strcmp(handler->name, ch->name) == 0) {
+			return -EEXIST;
+		}
 	}
+
+	k_mutex_lock(&settings_lock, K_FOREVER);
+
+	struct settings_handler *ch;
+	SYS_SLIST_FOR_EACH_CONTAINER(&settings_handlers, ch, node) {
+		if (strcmp(handler->name, ch->name) == 0) {
+			rc = -EEXIST;
+			goto end;
+		}
+	}
+
+	handler->cprio = cprio;
+	sys_slist_append(&settings_handlers, &handler->node);
+
+end:
+	k_mutex_unlock(&settings_lock);
+	return rc;
 }
 
 int settings_register(struct settings_handler *handler)
 {
-	if (settings_handler_lookup(handler->name)) {
-		return -EEXIST;
+	return settings_register_with_cprio(handler, 0);
+}
+#endif /* CONFIG_SETTINGS_DYNAMIC_HANDLERS */
+
+int settings_name_steq(const char *name, const char *key, const char **next)
+{
+	if (next) {
+		*next = NULL;
 	}
-	sys_slist_prepend(&settings_handlers, &handler->node);
+
+	if ((!name) || (!key)) {
+		return 0;
+	}
+
+	/* name might come from flash directly, in flash the name would end
+	 * with '=' or '\0' depending how storage is done. Flash reading is
+	 * limited to what can be read
+	 */
+
+	while ((*key != '\0') && (*key == *name) &&
+	       (*name != '\0') && (*name != SETTINGS_NAME_END)) {
+		key++;
+		name++;
+	}
+
+	if (*key != '\0') {
+		return 0;
+	}
+
+	if (*name == SETTINGS_NAME_SEPARATOR) {
+		if (next) {
+			*next = name + 1;
+		}
+		return 1;
+	}
+
+	if ((*name == SETTINGS_NAME_END) || (*name == '\0')) {
+		return 1;
+	}
 
 	return 0;
 }
 
-/*
- * Find settings_handler based on name.
- */
-static struct settings_handler *settings_handler_lookup(char *name)
+int settings_name_next(const char *name, const char **next)
 {
-	struct settings_handler *ch;
+	int rc = 0;
 
-	SYS_SLIST_FOR_EACH_CONTAINER(&settings_handlers, ch, node) {
-		if (!strcmp(name, ch->name)) {
-			return ch;
+	if (next) {
+		*next = NULL;
+	}
+
+	if (!name) {
+		return 0;
+	}
+
+	/* name might come from flash directly, in flash the name would end
+	 * with '=' or '\0' depending how storage is done. Flash reading is
+	 * limited to what can be read
+	 */
+	while ((*name != '\0') && (*name != SETTINGS_NAME_END) &&
+	       (*name != SETTINGS_NAME_SEPARATOR)) {
+		rc++;
+		name++;
+	}
+
+	if (*name == SETTINGS_NAME_SEPARATOR) {
+		if (next) {
+			*next = name + 1;
 		}
-	}
-	return NULL;
-}
-
-/*
- * Separate string into argv array.
- */
-int settings_parse_name(char *name, int *name_argc, char *name_argv[])
-{
-	int i = 0;
-
-	while (name) {
-		name_argv[i++] = name;
-
-		while (1) {
-			if (*name == '\0') {
-				name = NULL;
-				break;
-			}
-
-			if (*name == *SETTINGS_NAME_SEPARATOR) {
-				*name = '\0';
-				name++;
-				break;
-			}
-			name++;
-		}
-	}
-
-	*name_argc = i;
-
-	return 0;
-}
-
-static struct settings_handler *settings_parse_and_lookup(char *name,
-							  int *name_argc,
-							  char *name_argv[])
-{
-	int rc;
-
-	rc = settings_parse_name(name, name_argc, name_argv);
-	if (rc) {
-		return NULL;
-	}
-	return settings_handler_lookup(name_argv[0]);
-}
-
-int settings_set_value_priv(char *name, void *val_read_cb_ctx, off_t off,
-		       u8_t is_runtime)
-{
-	int name_argc;
-	char *name_argv[SETTINGS_MAX_DIR_DEPTH];
-	struct settings_handler *ch;
-	struct read_value_cb_ctx value_ctx;
-
-	ch = settings_parse_and_lookup(name, &name_argc, name_argv);
-	if (!ch) {
-		return -EINVAL;
-	}
-
-	value_ctx.read_cb_ctx = val_read_cb_ctx;
-	value_ctx.off = off;
-	value_ctx.runtime = is_runtime;
-
-	return ch->h_set(name_argc - 1, &name_argv[1], (void *)&value_ctx);
-}
-
-/* API */
-int settings_set_value(char *name, void *val_str, size_t len)
-{
-	struct runtime_value_ctx rt_ctx;
-
-	rt_ctx.p_value = val_str;
-	rt_ctx.size = len;
-
-	return settings_set_value_priv(name, &rt_ctx, 0, 1);
-}
-
-/* API */
-int settings_val_read_cb(void *value_ctx, void *buf, size_t len)
-{
-	struct read_value_cb_ctx *value_context = value_ctx;
-	size_t len_read;
-	int rc;
-	struct runtime_value_ctx *rt_ctx;
-
-	if (value_context->runtime) {
-		rt_ctx = value_context->read_cb_ctx;
-		len_read = MIN(len, rt_ctx->size);
-		memcpy(buf, rt_ctx->p_value, len_read);
-		return len_read;
-	} else {
-		rc = settings_line_val_read(value_context->off, 0, buf, len,
-					    &len_read,
-					    value_context->read_cb_ctx);
-	}
-
-	if (rc == 0) {
-		return len_read;
+		return rc;
 	}
 
 	return rc;
 }
 
-/* API */
-size_t settings_val_get_len_cb(void *value_ctx)
+struct settings_handler_static *settings_parse_and_lookup(const char *name,
+							const char **next)
 {
-	struct read_value_cb_ctx *value_context = value_ctx;
-	struct runtime_value_ctx *rt_ctx;
+	struct settings_handler_static *bestmatch;
+	const char *tmpnext;
 
-	if (value_context->runtime) {
-		rt_ctx = value_context->read_cb_ctx;
-		return rt_ctx->size;
-	} else {
-		return settings_line_val_get_len(value_context->off,
-						 value_context->read_cb_ctx);
-	}
-}
-
-/*
- * Get value in printable string form. If value is not string, the value
- * will be filled in *buf.
- * Return value will be pointer to beginning of that buffer,
- * except for string it will pointer to beginning of string.
- */
-int settings_get_value(char *name, char *buf, int buf_len)
-{
-	int name_argc;
-	char *name_argv[SETTINGS_MAX_DIR_DEPTH];
-	struct settings_handler *ch;
-
-	ch = settings_parse_and_lookup(name, &name_argc, name_argv);
-	if (!ch) {
-		return -EINVAL;
+	bestmatch = NULL;
+	if (next) {
+		*next = NULL;
 	}
 
-	if (!ch->h_get) {
-		return -EINVAL;
-	}
-	return ch->h_get(name_argc - 1, &name_argv[1], buf, buf_len);
-}
-
-int settings_commit(char *name)
-{
-	int name_argc;
-	char *name_argv[SETTINGS_MAX_DIR_DEPTH];
-	struct settings_handler *ch;
-	int rc;
-	int rc2;
-
-	if (name) {
-		ch = settings_parse_and_lookup(name, &name_argc, name_argv);
-		if (!ch) {
-			return -EINVAL;
+	STRUCT_SECTION_FOREACH(settings_handler_static, ch) {
+		if (!settings_name_steq(name, ch->name, &tmpnext)) {
+			continue;
 		}
-		if (ch->h_commit) {
-			return ch->h_commit();
-		} else {
+		if (!bestmatch) {
+			bestmatch = ch;
+			if (next) {
+				*next = tmpnext;
+			}
+			continue;
+		}
+		if (settings_name_steq(ch->name, bestmatch->name, NULL)) {
+			bestmatch = ch;
+			if (next) {
+				*next = tmpnext;
+			}
+		}
+	}
+
+#if defined(CONFIG_SETTINGS_DYNAMIC_HANDLERS)
+	struct settings_handler *ch;
+
+	SYS_SLIST_FOR_EACH_CONTAINER(&settings_handlers, ch, node) {
+		if (!settings_name_steq(name, ch->name, &tmpnext)) {
+			continue;
+		}
+		if (!bestmatch) {
+			bestmatch = (struct settings_handler_static *)ch;
+			if (next) {
+				*next = tmpnext;
+			}
+			continue;
+		}
+		if (settings_name_steq(ch->name, bestmatch->name, NULL)) {
+			bestmatch = (struct settings_handler_static *)ch;
+			if (next) {
+				*next = tmpnext;
+			}
+		}
+	}
+#endif /* CONFIG_SETTINGS_DYNAMIC_HANDLERS */
+	return bestmatch;
+}
+
+int settings_call_set_handler(const char *name,
+			      size_t len,
+			      settings_read_cb read_cb,
+			      void *read_cb_arg,
+			      const struct settings_load_arg *load_arg)
+{
+	int rc;
+	const char *name_key = name;
+
+	if (load_arg && load_arg->subtree &&
+	    !settings_name_steq(name, load_arg->subtree, &name_key)) {
+		return 0;
+	}
+
+	if (load_arg && load_arg->cb) {
+		rc = load_arg->cb(name_key, len, read_cb, read_cb_arg,
+				  load_arg->param);
+	} else {
+		struct settings_handler_static *ch;
+
+		ch = settings_parse_and_lookup(name, &name_key);
+		if (!ch) {
 			return 0;
 		}
-	} else {
-		rc = 0;
-		SYS_SLIST_FOR_EACH_CONTAINER(&settings_handlers, ch, node) {
+
+		rc = ch->h_set(name_key, len, read_cb, read_cb_arg);
+
+		if (rc != 0) {
+			LOG_ERR("set-value failure. key: %s error(%d)",
+				name, rc);
+			/* Ignoring the error */
+			rc = 0;
+		} else {
+			LOG_DBG("set-value OK. key: %s",
+				name);
+		}
+	}
+	return rc;
+}
+
+int settings_commit(void)
+{
+	return settings_commit_subtree(NULL);
+}
+
+static int set_next_cprio(int handler_cprio, int cprio, int next_cprio)
+{
+	if (handler_cprio <= cprio) {
+		return next_cprio;
+	}
+
+	/* If cprio and next_cprio are identical then next_cprio has not
+	 * yet been set to any value and its initialized to the first
+	 * handler_cprio above cprio.
+	 */
+	if (cprio == next_cprio) {
+		return handler_cprio;
+	}
+
+	return MIN(handler_cprio, next_cprio);
+}
+
+int settings_commit_subtree(const char *subtree)
+{
+	int rc;
+	int rc2;
+	int cprio = INT_MIN;
+
+	rc = 0;
+
+	while (true) {
+		int next_cprio = cprio;
+
+		STRUCT_SECTION_FOREACH(settings_handler_static, ch) {
+			if (subtree && !settings_name_steq(ch->name, subtree, NULL)) {
+				continue;
+			}
+
 			if (ch->h_commit) {
+				next_cprio = set_next_cprio(ch->cprio, cprio, next_cprio);
+				if (ch->cprio != cprio) {
+					continue;
+				}
+
 				rc2 = ch->h_commit();
 				if (!rc) {
 					rc = rc2;
 				}
 			}
 		}
-		return rc;
+
+		if (IS_ENABLED(CONFIG_SETTINGS_DYNAMIC_HANDLERS)) {
+			struct settings_handler *ch;
+
+			SYS_SLIST_FOR_EACH_CONTAINER(&settings_handlers, ch, node) {
+				if (subtree && !settings_name_steq(ch->name, subtree, NULL)) {
+					continue;
+				}
+
+				if (ch->h_commit) {
+					next_cprio = set_next_cprio(ch->cprio, cprio, next_cprio);
+					if (ch->cprio != cprio) {
+						continue;
+					}
+
+					rc2 = ch->h_commit();
+					if (!rc) {
+						rc = rc2;
+					}
+				}
+			}
+		}
+
+		if (cprio == next_cprio) {
+			break;
+		}
+
+		cprio = next_cprio;
 	}
+
+	return rc;
 }

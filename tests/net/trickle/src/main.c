@@ -6,25 +6,25 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(net_test, CONFIG_NET_TRICKLE_LOG_LEVEL);
 
 #include <zephyr/types.h>
-#include <ztest.h>
+#include <zephyr/ztest.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
 #include <errno.h>
-#include <misc/printk.h>
-#include <linker/sections.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/linker/sections.h>
 
-#include <tc_util.h>
+#include <zephyr/tc_util.h>
 
-#include <net/buf.h>
-#include <net/net_ip.h>
-#include <net/net_if.h>
+#include <zephyr/net_buf.h>
+#include <zephyr/net/net_ip.h>
+#include <zephyr/net/net_if.h>
 
-#include <net/trickle.h>
+#include <zephyr/net/trickle.h>
 
 #include "net_private.h"
 
@@ -37,6 +37,7 @@ LOG_MODULE_REGISTER(net_test, CONFIG_NET_TRICKLE_LOG_LEVEL);
 static int token1 = 1, token2 = 2;
 
 static struct k_sem wait;
+static struct k_sem wait2;
 static bool cb_1_called;
 static bool cb_2_called;
 
@@ -76,7 +77,7 @@ static void cb_2(struct net_trickle *trickle, bool do_suppress,
 {
 	TC_PRINT("Trickle 2 %p callback called\n", trickle);
 
-	k_sem_give(&wait);
+	k_sem_give(&wait2);
 
 	cb_2_called = true;
 }
@@ -166,7 +167,7 @@ static void test_trickle_1_wait_long(void)
 
 static void test_trickle_2_wait(void)
 {
-	k_sem_take(&wait, WAIT_TIME);
+	k_sem_take(&wait2, WAIT_TIME);
 
 	zassert_true(cb_2_called, "Trickle 2 no timeout");
 
@@ -194,24 +195,24 @@ static void test_trickle_1_update(void)
 static void test_init(void)
 {
 	k_sem_init(&wait, 0, UINT_MAX);
+	k_sem_init(&wait2, 0, UINT_MAX);
 }
 
-/*test case main entry*/
-void test_main(void)
+ZTEST(net_trickle, test_trickle)
 {
-	ztest_test_suite(test_tickle,
-			ztest_unit_test(test_init),
-			ztest_unit_test(test_trickle_create),
-			ztest_unit_test(test_trickle_start),
-			ztest_unit_test(test_trickle_1_status),
-			ztest_unit_test(test_trickle_2_status),
-			ztest_unit_test(test_trickle_1_wait),
-			ztest_unit_test(test_trickle_2_wait),
-			ztest_unit_test(test_trickle_1_update),
-			ztest_unit_test(test_trickle_2_inc),
-			ztest_unit_test(test_trickle_1_status),
-			ztest_unit_test(test_trickle_1_wait_long),
-			ztest_unit_test(test_trickle_stop),
-			ztest_unit_test(test_trickle_1_stopped));
-	ztest_run_test_suite(test_tickle);
+	test_init();
+	test_trickle_create();
+	test_trickle_start();
+	test_trickle_1_status();
+	test_trickle_2_status();
+	test_trickle_1_wait();
+	test_trickle_2_wait();
+	test_trickle_1_update();
+	test_trickle_2_inc();
+	test_trickle_1_status();
+	test_trickle_1_wait_long();
+	test_trickle_stop();
+	test_trickle_1_stopped();
 }
+
+ZTEST_SUITE(net_trickle, NULL, NULL, NULL, NULL, NULL);

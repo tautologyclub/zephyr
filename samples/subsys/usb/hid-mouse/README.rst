@@ -1,7 +1,8 @@
-.. _usb_hid-mouse:
+.. zephyr:code-sample:: usb-hid-mouse
+   :name: USB HID mouse
+   :relevant-api: _usb_device_core_api usb_hid_device_api input_interface
 
-USB HID mouse Sample Application
-################################
+   Implement a basic HID mouse device.
 
 Overview
 ********
@@ -19,20 +20,24 @@ Zephyr project tree.
 Requirements
 ************
 
-This project requires an USB device driver, and there must has at least one
-GPIO button in your board.
+This project requires an USB device driver and uses the :ref:`input` API.
+There must be a :dtcompatible:`gpio-keys` group of buttons or keys defined at
+the board level that can generate input events, otherwise the example will build
+but not work as expected.
 
-To use this sample, you will require a board that defines the user switch in its
-header file. The :file:`board.h` must define the following variables:
+The key mapping in the sample is as follows:
 
-- SW0_GPIO_CONTROLLER
-- SW0_GPIO_PIN
+- ``INPUT_KEY_0``: left button
+- ``INPUT_KEY_1``: right button
+- ``INPUT_KEY_2``: move the mouse along the x-axis
+- ``INPUT_KEY_3``: move the mouse along the y-axis
 
-The following variables are optional and depend on available board buttons:
+An LED must also be configured via the ``led0`` devicetree alias. You may also
+see this error if you try to build this sample for an unsupported board:
 
-- For right-button: SW1_GPIO_CONTROLLER, SW1_GPIO_PIN
-- For X-axis: SW2_GPIO_CONTROLLER, SW2_GPIO_PIN
-- For Y-axis: SW3_GPIO_CONTROLLER, SW3_GPIO_PIN
+.. code-block:: none
+
+   Unsupported board: led0 devicetree alias is not defined
 
 Building and Running
 ********************
@@ -54,11 +59,11 @@ The board will be detected as shown by the Linux dmesg command:
 
     dmesg | tail -10
     usb 2-2: new full-speed USB device number 2 using at91_ohci
-    usb 2-2: New USB device found, idVendor=2fe3, idProduct=0100
+    usb 2-2: New USB device found, idVendor=2fe3, idProduct=0007, bcdDevice= 2.03
     usb 2-2: New USB device strings: Mfr=1, Product=2, SerialNumber=3
     usb 2-2: Product: Zephyr HID mouse sample
     usb 2-2: Manufacturer: ZEPHYR
-    usb 2-2: SerialNumber: 0.01
+    usb 2-2: SerialNumber: 86FE679A598AC47A
     input: ZEPHYR Zephyr HID mouse sample as /devices/soc0/ahb/600000.ohci/usb2/2-2/2-2:1.0/0003:2FE3:0100.0001/input/input0
     hid-generic 0003:2FE3:0100.0001: input: USB HID v1.10 Mouse [ZEPHYR Zephyr HID mouse sample] on usb-at91-2/input0
 
@@ -72,8 +77,8 @@ You can also monitor mouse events by using the standard Linux ``evtest`` command
 
     sudo evtest /dev/input/event0
     Input driver version is 1.0.1
-    Input device ID: bus 0x3 vendor 0x2fe3 product 0x100 version 0x110
-    Input device name: "ZEPHYR USB-DEV"
+    Input device ID: bus 0x3 vendor 0x2fe3 product 0x7 version 0x110
+    Input device name: "ZEPHYR Zephyr HID mouse sample"
     Supported events:
       Event type 0 (EV_SYN)
       Event type 1 (EV_KEY)

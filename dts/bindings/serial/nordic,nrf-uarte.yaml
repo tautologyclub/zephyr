@@ -1,50 +1,16 @@
----
-title: Nordic UARTE
-version: 0.1
+description: Nordic nRF family UARTE (UART with EasyDMA)
 
-description: >
-    This binding gives a base representation of the Nordic UARTE
+compatible: "nordic,nrf-uarte"
 
-inherits:
-    !include uart.yaml
+include: ["nordic,nrf-uart-common.yaml", "memory-region.yaml"]
 
 properties:
-    compatible:
-      constraint: "nordic,nrf-uarte"
+  endtx-stoptx-supported:
+    type: boolean
+    description: |
+      UARTE has ENDTX_STOPTX HW short.
 
-    reg:
-      type: array
-      description: mmio register space
-      generation: define
-      category: required
-
-    interrupts:
-      type: array
-      category: required
-      description: required interrupts
-      generation: define
-
-    tx-pin:
-      type: int
-      description: TX pin
-      generation: define
-      category: required
-
-    rx-pin:
-      type: int
-      description: RX pin
-      generation: define
-      category: required
-
-    rts-pin:
-      type: int
-      description: RTS pin
-      generation: define
-      category: optional
-
-    cts-pin:
-      type: int
-      description: CTS pin
-      generation: define
-      category: optional
-...
+  frame-timeout-supported:
+    type: boolean
+    description: |
+      UARTE has RX frame timeout HW feature.

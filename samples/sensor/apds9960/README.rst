@@ -1,7 +1,8 @@
-.. _apds9960:
+.. zephyr:code-sample:: apds9960
+   :name: APDS9960 RGB, ambient light, and gesture sensor
+   :relevant-api: sensor_interface
 
-APDS9960 RGB, Ambient Light, Gesture Sensor
-###########################################
+   Get ambient light, RGB, and proximity/gesture data from an APDS9960 sensor.
 
 Overview
 ********
@@ -13,22 +14,13 @@ sensor in polling mode (without an interrupt trigger).
 Building and Running
 ********************
 
-This sample application uses an APDS9960 sensor connected to an Arduino 101 board
+This sample application uses an APDS9960 sensor connected to a board
 (for example as shown in this
 `Sparkfun APDS9960 tutorial`_).
-There are two processor cores (x86 and ARC) on the Arduino 101.  You'll need to flash
-both this sample's code on the ARC core (using the ``arduino101_sss`` board target),
-and stub code on the x86 core (using the ``arduino_101`` board target), as shown below:
 
 .. zephyr-app-commands::
-   :zephyr-app: samples/sensors/apds9960
-   :board: arduino_101_sss
-   :goals: flash
-   :compact:
-
-.. zephyr-app-commands::
-   :zephyr-app: tests/booting/stub
-   :board: arduino_101
+   :zephyr-app: samples/sensor/apds9960
+   :board: reel_board
    :goals: flash
    :compact:
 

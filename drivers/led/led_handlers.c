@@ -4,30 +4,74 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <syscall_handler.h>
-#include <led.h>
+#include <zephyr/internal/syscall_handler.h>
+#include <zephyr/drivers/led.h>
 
-Z_SYSCALL_HANDLER(led_blink, dev, led, delay_on, delay_off)
+static inline int z_vrfy_led_blink(const struct device *dev, uint32_t led,
+				   uint32_t delay_on, uint32_t delay_off)
 {
-	Z_OOPS(Z_SYSCALL_DRIVER_LED(dev, blink));
-	return z_impl_led_blink((struct device *)dev, led, delay_on,
+	K_OOPS(K_SYSCALL_DRIVER_LED(dev, blink));
+	return z_impl_led_blink((const struct device *)dev, led, delay_on,
 					delay_off);
 }
+#include <zephyr/syscalls/led_blink_mrsh.c>
 
-Z_SYSCALL_HANDLER(led_set_brightness, dev, led, value)
+static inline int z_vrfy_led_get_info(const struct device *dev, uint32_t led,
+				      const struct led_info **info)
 {
-	Z_OOPS(Z_SYSCALL_DRIVER_LED(dev, set_brightness));
-	return z_impl_led_set_brightness((struct device *)dev, led, value);
+	K_OOPS(K_SYSCALL_OBJ(dev, K_OBJ_DRIVER_LED));
+	K_OOPS(K_SYSCALL_MEMORY_WRITE(info, sizeof(*info)));
+	return z_impl_led_get_info(dev, led, info);
 }
+#include <zephyr/syscalls/led_get_info_mrsh.c>
 
-Z_SYSCALL_HANDLER(led_on, dev, led)
+static inline int z_vrfy_led_set_brightness(const struct device *dev,
+					    uint32_t led,
+					    uint8_t value)
 {
-	Z_OOPS(Z_SYSCALL_DRIVER_LED(dev, on));
-	return z_impl_led_on((struct device *)dev, led);
+	K_OOPS(K_SYSCALL_DRIVER_LED(dev, set_brightness));
+	return z_impl_led_set_brightness((const struct device *)dev, led,
+					 value);
 }
+#include <zephyr/syscalls/led_set_brightness_mrsh.c>
 
-Z_SYSCALL_HANDLER(led_off, dev, led)
+static inline int
+z_vrfy_led_write_channels(const struct device *dev, uint32_t start_channel,
+			  uint32_t num_channels, const uint8_t *buf)
 {
-	Z_OOPS(Z_SYSCALL_DRIVER_LED(dev, off));
-	return z_impl_led_off((struct device *)dev, led);
+	K_OOPS(K_SYSCALL_OBJ(dev, K_OBJ_DRIVER_LED));
+	K_OOPS(K_SYSCALL_MEMORY_READ(buf, num_channels));
+	return z_impl_led_write_channels(dev, start_channel, num_channels, buf);
 }
+#include <zephyr/syscalls/led_write_channels_mrsh.c>
+
+static inline int z_vrfy_led_set_channel(const struct device *dev,
+					 uint32_t channel, uint8_t value)
+{
+	K_OOPS(K_SYSCALL_OBJ(dev, K_OBJ_DRIVER_LED));
+	return z_impl_led_set_channel(dev, channel, value);
+}
+#include <zephyr/syscalls/led_set_channel_mrsh.c>
+
+static inline int z_vrfy_led_set_color(const struct device *dev, uint32_t led,
+				       uint8_t num_colors, const uint8_t *color)
+{
+	K_OOPS(K_SYSCALL_OBJ(dev, K_OBJ_DRIVER_LED));
+	K_OOPS(K_SYSCALL_MEMORY_READ(color, num_colors));
+	return z_impl_led_set_color(dev, led, num_colors, color);
+}
+#include <zephyr/syscalls/led_set_color_mrsh.c>
+
+static inline int z_vrfy_led_on(const struct device *dev, uint32_t led)
+{
+	K_OOPS(K_SYSCALL_DRIVER_LED(dev, on));
+	return z_impl_led_on((const struct device *)dev, led);
+}
+#include <zephyr/syscalls/led_on_mrsh.c>
+
+static inline int z_vrfy_led_off(const struct device *dev, uint32_t led)
+{
+	K_OOPS(K_SYSCALL_DRIVER_LED(dev, off));
+	return z_impl_led_off((const struct device *)dev, led);
+}
+#include <zephyr/syscalls/led_off_mrsh.c>

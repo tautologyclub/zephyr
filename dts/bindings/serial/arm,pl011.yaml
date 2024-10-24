@@ -1,29 +1,12 @@
----
-title: ARM PL011 UART
-version: 0.1
+description: ARM PL011 UART
 
-description: >
-    This binding gives a base representation of the ARM PL011 UART
+compatible: "arm,pl011"
 
-inherits:
-    !include uart.yaml
+include: [uart-controller.yaml, pinctrl-device.yaml]
 
 properties:
-    compatible:
-      type: string
-      category: required
-      description: compatible strings
-      constraint: "arm,pl011"
+  reg:
+    required: true
 
-    reg:
-      type: array
-      description: mmio register space
-      generation: define
-      category: required
-
-    interrupts:
-      type: array
-      category: required
-      description: required interrupts
-      generation: define
-...
+  interrupts:
+    required: true

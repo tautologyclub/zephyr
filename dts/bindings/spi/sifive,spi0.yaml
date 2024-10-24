@@ -1,30 +1,17 @@
-#
 # Copyright (c) 2018, SiFive Inc.
-#
 # SPDX-License-Identifier: Apache-2.0
-#
----
-title: Sifive SPI driver
-version: 0.1
 
-description: >
-    This binding gives a base representation of the Sifive SPI controller
+description: |
+  Sifive SPI controller.
 
-inherits:
-    !include spi.yaml
+  Note: First instance of the Sifive SPI controller (spi0) must be kept
+  disabled if used to access SPI Flash ROM. Failing to do so could result in
+  crashes during boot time.
+
+compatible: "sifive,spi0"
+
+include: [spi-controller.yaml, pinctrl-device.yaml]
 
 properties:
-    compatible:
-      type: string
-      category: required
-      description: compatible strings
-      constraint: "sifive,spi0"
-      generation: define
-
-    reg:
-      type: array
-      description: mmio register space
-      generation: define
-      category: required
-
-...
+  reg:
+    required: true

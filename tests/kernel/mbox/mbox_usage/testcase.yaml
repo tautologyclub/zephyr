@@ -1,3 +1,5 @@
 tests:
-  kernel.mailbox:
-    tags: kernel
+  kernel.mailbox.usage:
+    tags:
+      - kernel
+      - mailbox

@@ -4,8 +4,7 @@
 
 '''Runner for NIOS II, based on quartus-flash.py and GDB.'''
 
-from west import log
-from runners.core import ZephyrBinaryRunner, NetworkPortHelper
+from runners.core import ZephyrBinaryRunner, NetworkPortHelper, RunnerCaps
 
 
 class Nios2BinaryRunner(ZephyrBinaryRunner):
@@ -18,7 +17,7 @@ class Nios2BinaryRunner(ZephyrBinaryRunner):
     #      and CONFIG_INCLUDE_RESET_VECTOR must be disabled."
 
     def __init__(self, cfg, quartus_py=None, cpu_sof=None, tui=False):
-        super(Nios2BinaryRunner, self).__init__(cfg)
+        super().__init__(cfg)
         self.hex_name = cfg.hex_file
         self.elf_name = cfg.elf_file
         self.cpu_sof = cpu_sof
@@ -31,16 +30,20 @@ class Nios2BinaryRunner(ZephyrBinaryRunner):
         return 'nios2'
 
     @classmethod
+    def capabilities(cls):
+        return RunnerCaps(commands={'flash', 'debug', 'debugserver', 'attach'})
+
+    @classmethod
     def do_add_parser(cls, parser):
         # TODO merge quartus-flash.py script into this file.
         parser.add_argument('--quartus-flash', required=True)
         parser.add_argument('--cpu-sof', required=True,
-                            help='path to the the CPU .sof data')
+                            help='path to the CPU .sof data')
         parser.add_argument('--tui', default=False, action='store_true',
                             help='if given, GDB uses -tui')
 
     @classmethod
-    def create(cls, cfg, args):
+    def do_create(cls, cfg, args):
         return Nios2BinaryRunner(cfg,
                                  quartus_py=args.quartus_flash,
                                  cpu_sof=args.cpu_sof,
@@ -57,15 +60,18 @@ class Nios2BinaryRunner(ZephyrBinaryRunner):
             raise ValueError('Cannot flash; --quartus-flash not given.')
         if self.cpu_sof is None:
             raise ValueError('Cannot flash; --cpu-sof not given.')
+        self.ensure_output('hex')
 
+        self.logger.info('Flashing file: {}'.format(self.hex_name))
         cmd = [self.quartus_py,
                '--sof', self.cpu_sof,
                '--kernel', self.hex_name]
-
+        self.require(cmd[0])
         self.check_call(cmd)
 
     def print_gdbserver_message(self, gdb_port):
-        log.inf('Nios II GDB server running on port {}'.format(gdb_port))
+        self.logger.info('Nios II GDB server running on port {}'.
+                         format(gdb_port))
 
     def debug_debugserver(self, command, **kwargs):
         # Per comments in the shell script, the NIOSII GDB server
@@ -80,6 +86,7 @@ class Nios2BinaryRunner(ZephyrBinaryRunner):
         server_cmd = (['nios2-gdb-server',
                        '--tcpport', str(gdb_port),
                        '--stop', '--reset-target'])
+        self.require(server_cmd[0])
 
         if command == 'debugserver':
             self.print_gdbserver_message(gdb_port)
@@ -94,6 +101,7 @@ class Nios2BinaryRunner(ZephyrBinaryRunner):
                        self.tui_arg +
                        [self.elf_name,
                         '-ex', 'target remote :{}'.format(gdb_port)])
+            self.require(gdb_cmd[0])
 
             self.print_gdbserver_message(gdb_port)
             self.run_server_and_client(server_cmd, gdb_cmd)

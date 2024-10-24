@@ -1,73 +1,46 @@
-#
 # Copyright (c) 2018, Nordic Semiconductor ASA
-#
 # SPDX-License-Identifier: Apache-2.0
-#
----
-title: Nordic nRF Family QDEC node
-version: 0.1
 
-description: >
-    This is a representation of the Nordic nRF QDEC node
+description: Nordic nRF quadrature decoder (QDEC) node
+
+compatible: "nordic,nrf-qdec"
+
+include: [sensor-device.yaml, pinctrl-device.yaml]
 
 properties:
-    compatible:
-      type: string
-      category: required
-      description: compatible strings
-      constraint: "nordic,nrf-qdec"
+  reg:
+    required: true
 
-    reg:
-      type: array
-      description: mmio register space
-      generation: define
-      category: required
+  interrupts:
+    required: true
 
-    interrupts:
-      type: array
-      category: required
-      description: required interrupts
-      generation: define
+  pinctrl-0:
+    required: true
 
-    a-pin:
-      type: int
-      description: A pin
-      generation: define
-      category: required
+  pinctrl-names:
+    required: true
 
-    b-pin:
-      type: int
-      description: B pin
-      generation: define
-      category: required
+  enable-pin:
+    type: int
+    description: |
+      The enable pin to use, to enable a connected QDEC device
 
-    led-pin:
-      type: int
-      description: LED pin for light based QDEC device
-      generation: define
-      category: optional
+      For pins P0.0 through P0.31, use the pin number. For example,
+      to use P0.16 for the A pin, set:
 
-    enable-pin:
-      type: int
-      description: Enables connected QDEC device
-      generation: define
-      category: optional
+          enable-pin = <16>;
 
-    led-pre:
-      type: int
-      description: Time LED is enabled prior to sampling event (in us)
-      generation: define
-      category: required
+      For pins P1.0 through P1.31, add 32 to the pin number. For
+      example, to use P1.2 for the A pin, set:
 
-    steps:
-      type: int
-      description: Number of steps on the rotating wheel
-      generation: define
-      category: required
+          enable-pin = <34>;  /* 32 + 2 */
 
-    label:
-      type: string
-      category: required
-      description: Human readable string describing the device (used by Zephyr for API name)
-      generation: define
-...
+  led-pre:
+    type: int
+    description: Time LED is enabled prior to sampling event (in us)
+    required: true
+
+  steps:
+    type: int
+    description: Number of steps on the rotating wheel
+    required: true

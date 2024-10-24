@@ -1,31 +1,34 @@
-#
 # Copyright (c) 2018, Cypress
-#
+# Copyright (c) 2020, ATL Electronics
 # SPDX-License-Identifier: Apache-2.0
-#
----
-title: CYPRESS UART
-version: 0.1
 
-description: >
-    This binding gives a base representation of the Cypress UART
+description: Cypress SCB[UART]
 
-inherits:
-    !include uart.yaml
+compatible: "cypress,psoc6-uart"
+
+include: [uart-controller.yaml, pinctrl-device.yaml]
 
 properties:
-    compatible:
-      constraint: "cypress,psoc6-uart"
+  reg:
+    required: true
 
-    reg:
-      type: array
-      description: mmio register space
-      generation: define
-      category: required
+  interrupts:
+    required: true
 
-    interrupts:
-      type: array
-      category: required
-      description: required interrupts
-      generation: define
-...
+  peripheral-id:
+    type: int
+    description: peripheral ID
+    required: true
+
+  pinctrl-0:
+    type: phandles
+    description: |
+      Port pin configuration for RX & TX signals.  We expect that the
+      phandles will reference pinctrl nodes.  These nodes will have a
+      nodelabel that matches the Cypress SoC HAL defines and be of the
+      form p<port>_<pin>_<periph><inst>_<signal>.
+
+      For example the UART on PSoC-63 Pioneer Kit would be
+         pinctrl-0 = <&p5_0_uart5_rx &p5_1_uart5_tx>;
+
+    required: true

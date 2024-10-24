@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0
 #
 
@@ -35,7 +35,7 @@ cocci	= all cocci scripts available at scripts/coccinelle/*
 
 If no [DIRECTORY|FILE] is supplied, entire codebase is processed.
 
-For detailed documentation refer: doc/application/coccinelle.rst"
+For detailed documentation refer: doc/guides/coccinelle.rst"
 
 for i in "$@"
 do
@@ -93,6 +93,8 @@ else
 	NPROC="$J"
 fi
 
+OPTIONS="--macro-file $ZEPHYR_BASE/scripts/coccinelle/macros.h $OPTIONS"
+
 if [ "$FILE" != "" ] ; then
     OPTIONS="--patch $ZEPHYR_BASE $OPTIONS"
 fi
@@ -146,7 +148,7 @@ coccinelle () {
 
     if [[ $VIRTUAL = "" ]]; then
 	    echo "No available modes found in \"$COCCI\" script."
-	    echo "Consider adding vitrual rules to the script."
+	    echo "Consider adding virtual rules to the script."
 	    exit 1
     elif [[ $VIRTUAL != *"$MODE"* ]]; then
 	    echo "Invalid mode \"$MODE\" supplied!"
@@ -161,7 +163,7 @@ coccinelle () {
 	    else
 		    MODE=org
 	    fi
-	    echo "Using random availble mode: \"$MODE\""
+	    echo "Using random available mode: \"$MODE\""
 	    echo ''
     fi
 

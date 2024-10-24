@@ -1,131 +1,124 @@
 # Copyright (c) 2017 Linaro Limited.
-# Copyright (c) 2019 Nordic Semiconductor ASA.
+# Copyright (c) 2023 Nordic Semiconductor ASA.
 #
 # SPDX-License-Identifier: Apache-2.0
 
 '''Runner for flashing with nrfjprog.'''
 
+import subprocess
 import sys
 
-from west import log
+from runners.nrf_common import ErrNotAvailableBecauseProtection, ErrVerify, \
+                               NrfBinaryRunner
 
-from runners.core import ZephyrBinaryRunner, RunnerCaps
+# https://infocenter.nordicsemi.com/index.jsp?topic=%2Fug_nrf_cltools%2FUG%2Fcltools%2Fnrf_nrfjprogexe_return_codes.html&cp=9_1_3_1
+UnavailableOperationBecauseProtectionError = 16
+VerifyError = 55
 
-
-class NrfJprogBinaryRunner(ZephyrBinaryRunner):
+class NrfJprogBinaryRunner(NrfBinaryRunner):
     '''Runner front-end for nrfjprog.'''
 
-    def __init__(self, cfg, family, softreset, snr, erase=False):
-        super(NrfJprogBinaryRunner, self).__init__(cfg)
-        self.hex_ = cfg.hex_file
-        self.family = family
-        self.softreset = softreset
-        self.snr = snr
-        self.erase = erase
+    def __init__(self, cfg, family, softreset, dev_id, erase=False,
+                 reset=True, tool_opt=[], force=False, recover=False,
+                 qspi_ini=None):
+
+        super().__init__(cfg, family, softreset, dev_id, erase, reset,
+                         tool_opt, force, recover)
+
+        self.qspi_ini = qspi_ini
 
     @classmethod
     def name(cls):
         return 'nrfjprog'
 
     @classmethod
-    def capabilities(cls):
-        return RunnerCaps(commands={'flash'})
+    def tool_opt_help(cls) -> str:
+        return 'Additional options for nrfjprog, e.g. "--clockspeed"'
 
+    @classmethod
+    def do_create(cls, cfg, args):
+        return NrfJprogBinaryRunner(cfg, args.nrf_family, args.softreset,
+                                    args.dev_id, erase=args.erase,
+                                    reset=args.reset,
+                                    tool_opt=args.tool_opt, force=args.force,
+                                    recover=args.recover, qspi_ini=args.qspi_ini)
     @classmethod
     def do_add_parser(cls, parser):
-        parser.add_argument('--nrf-family', required=True,
-                            choices=['NRF51', 'NRF52', 'NRF91'],
-                            help='family of nRF MCU')
-        parser.add_argument('--softreset', required=False,
-                            action='store_true',
-                            help='use reset instead of pinreset')
-        parser.add_argument('--erase', action='store_true',
-                            help='if given, mass erase flash before loading')
-        parser.add_argument('--snr', required=False,
-                            help='serial number of board to use')
+        super().do_add_parser(parser)
+        parser.add_argument('--qspiini', required=False, dest='qspi_ini',
+                            help='path to an .ini file with qspi configuration')
 
-    @classmethod
-    def create(cls, cfg, args):
-        return NrfJprogBinaryRunner(cfg, args.nrf_family, args.softreset,
-                                    args.snr, erase=args.erase)
-
-    def get_board_snr_from_user(self):
+    def do_get_boards(self):
         snrs = self.check_output(['nrfjprog', '--ids'])
-        snrs = snrs.decode(sys.getdefaultencoding()).strip().splitlines()
+        return snrs.decode(sys.getdefaultencoding()).strip().splitlines()
 
-        if len(snrs) == 0:
-            raise RuntimeError('"nrfjprog --ids" did not find a board; '
-                               'is the board connected?')
-        elif len(snrs) == 1:
-            board_snr = snrs[0]
-            if board_snr == '0':
-                raise RuntimeError('"nrfjprog --ids" returned 0; '
-                                   'is a debugger already connected?')
-            return board_snr
+    def do_require(self):
+        self.require('nrfjprog')
 
-        log.dbg("Refusing the temptation to guess a board",
-                level=log.VERBOSE_EXTREME)
+    def do_exec_op(self, op, force=False):
+        self.logger.debug(f'Executing op: {op}')
+        # Translate the op
 
-        # Use of print() here is advised. We don't want to lose
-        # this information in a separate log -- this is
-        # interactive and requires a terminal.
-        print('There are multiple boards connected.')
-        for i, snr in enumerate(snrs, 1):
-            print('{}. {}'.format(i, snr))
+        families = {'NRF51_FAMILY': 'NRF51', 'NRF52_FAMILY': 'NRF52',
+                    'NRF53_FAMILY': 'NRF53', 'NRF54L_FAMILY': 'NRF54L',
+                    'NRF91_FAMILY': 'NRF91'}
+        cores = {'NRFDL_DEVICE_CORE_APPLICATION': 'CP_APPLICATION',
+                 'NRFDL_DEVICE_CORE_NETWORK': 'CP_NETWORK'}
 
-        p = 'Please select one with desired serial number (1-{}): '.format(
-                len(snrs))
-        while True:
-            value = input(p)
-            try:
-                value = int(value)
-            except ValueError:
-                continue
-            if 1 <= value <= len(snrs):
-                break
+        core_opt = ['--coprocessor', cores[op['core']]] \
+                   if op.get('core') else []
 
-        return snrs[value - 1]
-
-    def do_run(self, command, **kwargs):
-        commands = []
-        if self.snr is None:
-            board_snr = self.get_board_snr_from_user()
-        else:
-            board_snr = self.snr.lstrip("0")
-        program_cmd = ['nrfjprog', '--program', self.hex_, '-f', self.family,
-                       '--snr', board_snr]
-
-        print('Flashing file: {}'.format(self.hex_))
-        if self.erase:
-            commands.extend([
-                ['nrfjprog',
-                 '--eraseall',
-                 '-f', self.family,
-                 '--snr', board_snr],
-                program_cmd
-            ])
-        else:
-            if self.family == 'NRF52':
-                commands.append(program_cmd + ['--sectoranduicrerase'])
+        cmd = ['nrfjprog']
+        _op = op['operation']
+        op_type = _op['type']
+        # options that are an empty dict must use "in" instead of get()
+        if op_type == 'pinreset-enable':
+            cmd.append('--pinresetenable')
+        elif op_type == 'program':
+            cmd.append('--program')
+            cmd.append(_op['firmware']['file'])
+            erase = _op['chip_erase_mode']
+            if erase == 'ERASE_ALL':
+                cmd.append('--chiperase')
+            elif erase == 'ERASE_PAGES':
+                cmd.append('--sectorerase')
+            elif erase == 'ERASE_PAGES_INCLUDING_UICR':
+                cmd.append('--sectoranduicrerase')
+            elif erase == 'NO_ERASE':
+                pass
             else:
-                commands.append(program_cmd + ['--sectorerase'])
+                raise RuntimeError(f'Invalid erase mode: {erase}')
 
-        if self.family == 'NRF52' and not self.softreset:
-            commands.extend([
-                # Enable pin reset
-                ['nrfjprog', '--pinresetenable', '-f', self.family,
-                 '--snr', board_snr],
-            ])
-
-        if self.softreset:
-            commands.append(['nrfjprog', '--reset', '-f', self.family,
-                             '--snr', board_snr])
+            if _op.get('qspi_erase_mode'):
+                # In the future there might be multiple QSPI erase modes
+                cmd.append('--qspisectorerase')
+            if _op.get('verify'):
+                # In the future there might be multiple verify modes
+                cmd.append('--verify')
+            if self.qspi_ini:
+                cmd.append('--qspiini')
+                cmd.append(self.qspi_ini)
+        elif op_type == 'recover':
+            cmd.append('--recover')
+        elif op_type == 'reset':
+            if _op['option'] == 'RESET_SYSTEM':
+                cmd.append('--reset')
+            if _op['option'] == 'RESET_PIN':
+                cmd.append('--pinreset')
+        elif op_type == 'erasepage':
+            cmd.append('--erasepage')
+            cmd.append(f"0x{_op['page']:08x}")
         else:
-            commands.append(['nrfjprog', '--pinreset', '-f', self.family,
-                             '--snr', board_snr])
+            raise RuntimeError(f'Invalid operation: {op_type}')
 
-        for cmd in commands:
-            self.check_call(cmd)
-
-        log.inf('Board with serial number {} flashed successfully.'.format(
-                  board_snr))
+        try:
+            self.check_call(cmd + ['-f', families[self.family]] + core_opt +
+                            ['--snr', self.dev_id] + self.tool_opt)
+        except subprocess.CalledProcessError as cpe:
+            # Translate error codes
+            if cpe.returncode == UnavailableOperationBecauseProtectionError:
+                cpe.returncode = ErrNotAvailableBecauseProtection
+            elif cpe.returncode == VerifyError:
+                cpe.returncode = ErrVerify
+            raise cpe
+        return True

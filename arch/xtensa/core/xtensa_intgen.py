@@ -74,7 +74,7 @@ for match in re.finditer(r'__xtensa_int_level_magic__\s+(\d+)\s+(\d+)', blob):
     irq = int(match.group(1))
     lvl = int(match.group(2))
 
-    if not lvl in ints_by_lvl:
+    if lvl not in ints_by_lvl:
         ints_by_lvl[lvl] = []
 
     ints_by_lvl[lvl].append(irq)
@@ -94,8 +94,8 @@ cprint("")
 
 # Re-include the core-isa header and be sure our definitions match, for sanity
 cprint("#include <xtensa/config/core-isa.h>")
-cprint("#include <misc/util.h>")
-cprint("#include <sw_isr_table.h>")
+cprint("#include <zephyr/sys/util.h>")
+cprint("#include <zephyr/sw_isr_table.h>")
 cprint("")
 for l in ints_by_lvl:
     for i in ints_by_lvl[l]:
@@ -105,13 +105,11 @@ for l in ints_by_lvl:
         cprint("#endif")
 cprint("")
 
-# Populate empty levels just for sanity.  The second-to-last interrupt
-# level (usually "debug") typically doesn't have any associated
-# vectors, but we don't have any way to know that a-prioi.
-max = 0
-for lvl in ints_by_lvl:
-    if lvl > max:
-        max = lvl
+# Populate all theoretical levels just in case.  Odd cores have been
+# seen in the wild with "empty" interrupt levels that exist in the
+# hardware but without any interrupts associated with them.  The
+# unused handlers will be ignored if uncalled.
+max = 15
 
 for lvl in range(0, max+1):
     if not lvl in ints_by_lvl:

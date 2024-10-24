@@ -7,13 +7,13 @@
 
 #include "fcb_test.h"
 
-void fcb_test_append_fill(void)
+ZTEST(fcb_test_with_2sectors_set, test_fcb_append_fill)
 {
 	struct fcb *fcb;
 	int rc;
 	int i;
 	struct fcb_entry loc;
-	u8_t test_data[128];
+	uint8_t test_data[128];
 	int elem_cnts[2] = {0, 0};
 	int aa_together_cnts[2];
 	struct append_arg aa_together = {
@@ -32,7 +32,7 @@ void fcb_test_append_fill(void)
 
 	while (1) {
 		rc = fcb_append(fcb, sizeof(test_data), &loc);
-		if (rc == FCB_ERR_NOSPACE) {
+		if (rc == -ENOSPC) {
 			break;
 		}
 		if (loc.fe_sector == &test_fcb_sector[0]) {

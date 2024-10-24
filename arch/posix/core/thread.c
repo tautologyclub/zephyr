@@ -13,74 +13,139 @@
  * architecture
  */
 
-#ifdef CONFIG_INIT_STACKS
-#include <string.h>
-#endif /* CONFIG_INIT_STACKS */
-
-#include <toolchain.h>
-#include <kernel_structs.h>
-#include <wait_q.h>
+#include <stdio.h>
+#include <zephyr/toolchain.h>
+#include <zephyr/kernel_structs.h>
+#include <ksched.h>
 
 #include "posix_core.h"
-#include "posix_soc_if.h"
+#include <zephyr/arch/posix/posix_soc_if.h>
 
+#ifdef CONFIG_TRACING
+#include <zephyr/tracing/tracing_macros.h>
+#include <zephyr/tracing/tracing.h>
+#endif
 
-/**
- * @brief Create a new kernel execution thread
- *
- * Initializes the k_thread object and sets up initial stack frame.
- *
- * @param thread pointer to thread struct memory, including any space needed
- *		for extra coprocessor context
- * @param stack the pointer to aligned stack memory
- * @param stack_size the stack size in bytes
- * @param entry thread entry point routine
- * @param arg1 first param to entry point
- * @param arg2 second param to entry point
- * @param arg3 third param to entry point
- * @param priority thread priority
- * @param options thread options: K_ESSENTIAL, K_FP_REGS, K_SSE_REGS
- *
- * Note that in this arch we cheat quite a bit: we use as stack a normal
+/* Note that in this arch we cheat quite a bit: we use as stack a normal
  * pthreads stack and therefore we ignore the stack size
- *
  */
-void z_new_thread(struct k_thread *thread, k_thread_stack_t *stack,
-		size_t stack_size, k_thread_entry_t thread_func,
-		void *arg1, void *arg2, void *arg3,
-		int priority, unsigned int options)
+void arch_new_thread(struct k_thread *thread, k_thread_stack_t *stack,
+		     char *stack_ptr, k_thread_entry_t entry,
+		     void *p1, void *p2, void *p3)
 {
 
-	char *stack_memory = Z_THREAD_STACK_BUFFER(stack);
-
-	Z_ASSERT_VALID_PRIO(priority, thread_func);
-
 	posix_thread_status_t *thread_status;
-
-	z_new_thread_init(thread, stack_memory, stack_size, priority, options);
 
 	/* We store it in the same place where normal archs store the
 	 * "initial stack frame"
 	 */
-	thread_status = (posix_thread_status_t *)
-		STACK_ROUND_DOWN(stack_memory + stack_size
-				- sizeof(*thread_status));
+	thread_status = Z_STACK_PTR_TO_FRAME(posix_thread_status_t, stack_ptr);
 
 	/* z_thread_entry() arguments */
-	thread_status->entry_point = thread_func;
-	thread_status->arg1 = arg1;
-	thread_status->arg2 = arg2;
-	thread_status->arg3 = arg3;
+	thread_status->entry_point = entry;
+	thread_status->arg1 = p1;
+	thread_status->arg2 = p2;
+	thread_status->arg3 = p3;
 #if defined(CONFIG_ARCH_HAS_THREAD_ABORT)
 	thread_status->aborted = 0;
 #endif
 
-	thread->callee_saved.thread_status = (u32_t)thread_status;
+	thread->callee_saved.thread_status = thread_status;
 
-	posix_new_thread(thread_status);
+	thread_status->thread_idx = posix_new_thread((void *)thread_status);
 }
 
-void posix_new_thread_pre_start(void)
+int arch_thread_name_set(struct k_thread *thread, const char *str)
 {
-	posix_irq_full_unlock();
+#define MAX_HOST_THREAD_NAME 16
+
+	int ret;
+	int thread_index;
+	posix_thread_status_t *thread_status;
+	char th_name[MAX_HOST_THREAD_NAME];
+
+	thread_status = thread->callee_saved.thread_status;
+	if (!thread_status) {
+		return -EAGAIN;
+	}
+
+	thread_index = thread_status->thread_idx;
+
+	if (!str) {
+		return -EAGAIN;
+	}
+
+	snprintf(th_name, MAX_HOST_THREAD_NAME,
+	#if (CONFIG_NATIVE_SIMULATOR_NUMBER_MCUS > 1)
+			STRINGIFY(CONFIG_NATIVE_SIMULATOR_MCU_N) ":"
+	#endif
+		"%s", str);
+
+	ret = posix_arch_thread_name_set(thread_index, th_name);
+	if (ret) {
+		return -EAGAIN;
+	}
+
+	return 0;
 }
+
+void posix_arch_thread_entry(void *pa_thread_status)
+{
+	posix_thread_status_t *ptr = pa_thread_status;
+	posix_irq_full_unlock();
+	z_thread_entry(ptr->entry_point, ptr->arg1, ptr->arg2, ptr->arg3);
+}
+
+#if defined(CONFIG_ARCH_HAS_THREAD_ABORT)
+void z_impl_k_thread_abort(k_tid_t thread)
+{
+	unsigned int key;
+	int thread_idx;
+
+	SYS_PORT_TRACING_OBJ_FUNC_ENTER(k_thread, abort, thread);
+
+	posix_thread_status_t *tstatus =
+					(posix_thread_status_t *)
+					thread->callee_saved.thread_status;
+
+	thread_idx = tstatus->thread_idx;
+
+	key = irq_lock();
+
+	if (_current == thread) {
+		if (tstatus->aborted == 0) { /* LCOV_EXCL_BR_LINE */
+			tstatus->aborted = 1;
+		} else {
+			posix_print_warning(/* LCOV_EXCL_LINE */
+				"POSIX arch: The kernel is trying to abort and swap "
+				"out of an already aborted thread %i. This "
+				"should NOT have happened\n",
+				thread_idx);
+		}
+		posix_abort_thread(thread_idx);
+	}
+
+	z_thread_abort(thread);
+
+	if (tstatus->aborted == 0) {
+		PC_DEBUG("%s aborting now [%i] %i\n",
+			__func__,
+			posix_arch_get_unique_thread_id(thread_idx),
+			thread_idx);
+
+		tstatus->aborted = 1;
+		posix_abort_thread(thread_idx);
+	} else {
+		PC_DEBUG("%s ignoring re_abort of [%i] "
+			"%i\n",
+			__func__,
+			posix_arch_get_unique_thread_id(thread_idx),
+			thread_idx);
+	}
+
+	/* The abort handler might have altered the ready queue. */
+	z_reschedule_irqlock(key);
+
+	SYS_PORT_TRACING_OBJ_FUNC_EXIT(k_thread, abort, thread);
+}
+#endif

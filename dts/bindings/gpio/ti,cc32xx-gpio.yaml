@@ -1,40 +1,20 @@
----
 # SPDX-License-Identifier: Apache-2.0
-title: TI CC32XX GPIO
-version: 0.1
+description: TI CC32XX GPIO node
 
-description: >
-    This is a representation of the TI CC32XX GPIO node
+compatible: "ti,cc32xx-gpio"
+
+include: [gpio-controller.yaml, base.yaml]
 
 properties:
-    compatible:
-      type: string
-      category: required
-      description: compatible strings
-      constraint: "ti,cc32xx-gpio"
-      generation: define
+  reg:
+    required: true
 
-    reg:
-      type: int
-      description: mmio register space
-      generation: define
-      category: required
+  interrupts:
+    required: true
 
-    interrupts:
-      type: compound
-      category: required
-      description: required interrupts
-      generation: define
+  "#gpio-cells":
+    const: 2
 
-    label:
-      type: string
-      category: required
-      description: Human readable string describing the device (used by Zephyr for API name)
-      generation: define
-
-cell_string: GPIO
-
-"#cells":
+gpio-cells:
   - pin
   - flags
-...

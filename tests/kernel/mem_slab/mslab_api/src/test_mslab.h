@@ -9,9 +9,11 @@
 
 #define TIMEOUT 2000
 #define BLK_NUM 3
-#define BLK_ALIGN 4
-#define BLK_SIZE 8
+#define BLK_ALIGN 8
+#define BLK_SIZE 16
+#define STACKSIZE (1024 + CONFIG_TEST_EXTRA_STACK_SIZE)
 
 extern void tmslab_alloc_free(void *data);
+extern void *mslab_setup(void);
 
 #endif /*__TEST_MSLAB_H__*/

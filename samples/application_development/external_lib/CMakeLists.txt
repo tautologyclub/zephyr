@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
-cmake_minimum_required(VERSION 3.13.1)
-include($ENV{ZEPHYR_BASE}/cmake/app/boilerplate.cmake NO_POLICY_SCOPE)
+cmake_minimum_required(VERSION 3.20.0)
+find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(external_lib)
 
 target_sources(app PRIVATE src/main.c)
@@ -19,8 +19,12 @@ zephyr_get_system_include_directories_for_lang_as_string(C system_includes)
 zephyr_get_compile_definitions_for_lang_as_string(       C definitions)
 zephyr_get_compile_options_for_lang_as_string(           C options)
 
+if(DEFINED CMAKE_C_COMPILER_TARGET)
+  set(target_flag "--target=${CMAKE_C_COMPILER_TARGET}")
+endif()
+
 set(external_project_cflags
-  "${includes} ${definitions} ${options} ${system_includes}"
+  "${target_flag} ${includes} ${definitions} ${options} ${system_includes}"
   )
 
 include(ExternalProject)
@@ -34,6 +38,13 @@ set(mylib_build_dir ${CMAKE_CURRENT_BINARY_DIR}/mylib)
 set(MYLIB_LIB_DIR     ${mylib_build_dir}/lib)
 set(MYLIB_INCLUDE_DIR ${mylib_src_dir}/include)
 
+if(CMAKE_GENERATOR STREQUAL "Unix Makefiles")
+# https://www.gnu.org/software/make/manual/html_node/MAKE-Variable.html
+set(submake "$(MAKE)")
+else() # Obviously no MAKEFLAGS. Let's hope a "make" can be found somewhere.
+set(submake "make")
+endif()
+
 ExternalProject_Add(
   mylib_project                 # Name for custom target
   PREFIX     ${mylib_build_dir} # Root dir for entire project
@@ -41,7 +52,7 @@ ExternalProject_Add(
   BINARY_DIR ${mylib_src_dir} # This particular build system is invoked from the root
   CONFIGURE_COMMAND ""    # Skip configuring the project, e.g. with autoconf
   BUILD_COMMAND
-  make
+  ${submake}
   PREFIX=${mylib_build_dir}
   CC=${CMAKE_C_COMPILER}
   AR=${CMAKE_AR}

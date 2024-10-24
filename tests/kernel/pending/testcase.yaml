@@ -1,4 +1,8 @@
 tests:
-  kernel.common.timing:
-    min_ram: 16
+  kernel.objects:
     tags: kernel
+  kernel.objects.minimallibc:
+    filter: CONFIG_MINIMAL_LIBC_SUPPORTED
+    tags: kernel libc
+    extra_configs:
+      - CONFIG_MINIMAL_LIBC=y

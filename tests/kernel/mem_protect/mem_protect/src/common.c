@@ -3,33 +3,20 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-#include <zephyr.h>
-#include <ztest.h>
+#include <zephyr/kernel.h>
+#include <zephyr/ztest.h>
 
-#define SYNC_BARRIER_SEMAPHORE_INIT_COUNT (0)
-#define SYNC_BARRIER_SEMAPHORE_MAX_COUNT (1)
+ZTEST_BMEM volatile bool valid_fault;
 
-K_SEM_DEFINE(sync_sem,
-	     SYNC_BARRIER_SEMAPHORE_INIT_COUNT,
-	     SYNC_BARRIER_SEMAPHORE_MAX_COUNT);
-
-K_SEM_DEFINE(barrier_sem,
-	     SYNC_BARRIER_SEMAPHORE_INIT_COUNT,
-	     SYNC_BARRIER_SEMAPHORE_MAX_COUNT);
-
-ZTEST_BMEM bool valid_fault;
-
-void z_SysFatalErrorHandler(unsigned int reason, const NANO_ESF *pEsf)
+void k_sys_fatal_error_handler(unsigned int reason, const struct arch_esf *pEsf)
 {
 	printk("Caught system error -- reason %d %d\n", reason, valid_fault);
 	if (valid_fault) {
+		printk("fatal error expected as part of test case\n");
 		valid_fault = false; /* reset back to normal */
-		ztest_test_pass();
 	} else {
-		ztest_test_fail();
+		printk("fatal error was unexpected, aborting\n");
+		TC_END_REPORT(TC_FAIL);
+		k_fatal_halt(reason);
 	}
-
-#if !(defined(CONFIG_ARM) || defined(CONFIG_ARC))
-	CODE_UNREACHABLE;
-#endif
 }

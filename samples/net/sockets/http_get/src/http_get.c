@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#ifndef __ZEPHYR__
+#if !defined(__ZEPHYR__)
 
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -17,13 +17,15 @@
 
 #else
 
-#include <net/socket.h>
-#include <kernel.h>
+#include <zephyr/net/socket.h>
+#include <zephyr/kernel.h>
 
 #if defined(CONFIG_NET_SOCKETS_SOCKOPT_TLS)
-#include <net/tls_credentials.h>
+#include <zephyr/net/tls_credentials.h>
 #include "ca_certificate.h"
 #endif
+
+#include "net_sample_common.h"
 
 #endif
 
@@ -61,6 +63,8 @@ int main(void)
 	struct addrinfo *res;
 	int st, sock;
 
+	wait_for_network();
+
 #if defined(CONFIG_NET_SOCKETS_SOCKOPT_TLS)
 	tls_credential_add(CA_CERTIFICATE_TAG, TLS_CREDENTIAL_CA_CERTIFICATE,
 			   ca_certificate, sizeof(ca_certificate));
@@ -76,7 +80,7 @@ int main(void)
 
 	if (st != 0) {
 		printf("Unable to resolve address, quitting\n");
-		return 1;
+		return 0;
 	}
 
 #if 0
@@ -116,7 +120,7 @@ int main(void)
 
 		if (len < 0) {
 			printf("Error reading response\n");
-			return 1;
+			return 0;
 		}
 
 		if (len == 0) {
@@ -130,6 +134,5 @@ int main(void)
 	printf("\n");
 
 	(void)close(sock);
-
 	return 0;
 }

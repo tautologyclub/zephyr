@@ -9,14 +9,13 @@
  */
 
 
-#include <kernel.h>
-#include <misc/printk.h>
-#include <device.h>
-#include <init.h>
+#include <zephyr/kernel.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/sys/printk-hooks.h>
+#include <zephyr/sys/libc-hooks.h>
+#include <zephyr/device.h>
+#include <zephyr/init.h>
 #include <SEGGER_RTT.h>
-
-extern void __printk_hook_install(int (*fn)(int));
-extern void __stdout_hook_install(int (*fn)(int));
 
 static bool host_present;
 
@@ -25,12 +24,12 @@ static bool host_present;
  */
 static void wait(void)
 {
-	if (k_is_in_isr()) {
+	if (!IS_ENABLED(CONFIG_MULTITHREADING) || k_is_in_isr()) {
 		if (IS_ENABLED(CONFIG_RTT_TX_RETRY_IN_INTERRUPT)) {
 			k_busy_wait(1000*CONFIG_RTT_TX_RETRY_DELAY_MS);
 		}
 	} else {
-		k_sleep(CONFIG_RTT_TX_RETRY_DELAY_MS);
+		k_msleep(CONFIG_RTT_TX_RETRY_DELAY_MS);
 	}
 }
 
@@ -41,9 +40,7 @@ static int rtt_console_out(int character)
 	int max_cnt = CONFIG_RTT_TX_RETRY_CNT;
 
 	do {
-		SEGGER_RTT_LOCK();
-		cnt = SEGGER_RTT_WriteNoLock(0, &c, 1);
-		SEGGER_RTT_UNLOCK();
+		cnt = SEGGER_RTT_Write(0, &c, 1);
 
 		/* There are two possible reasons for not writing any data to
 		 * RTT:
@@ -78,14 +75,15 @@ static int rtt_console_out(int character)
 	return character;
 }
 
-static int rtt_console_init(struct device *d)
+static int rtt_console_init(void)
 {
-	ARG_UNUSED(d);
 
+#ifdef CONFIG_PRINTK
 	__printk_hook_install(rtt_console_out);
+#endif
 	__stdout_hook_install(rtt_console_out);
 
 	return 0;
 }
 
-SYS_INIT(rtt_console_init, PRE_KERNEL_1, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT);
+SYS_INIT(rtt_console_init, PRE_KERNEL_1, CONFIG_CONSOLE_INIT_PRIORITY);

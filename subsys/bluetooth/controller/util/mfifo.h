@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2019 Nordic Semiconductor ASA
+ * Copyright (c) 2018-2024 Nordic Semiconductor ASA
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -11,14 +11,14 @@
  * the backing storage.
  *
  * Enqueuing is a 2 step procedure: Alloc and commit. We say an allocated
- * buffer yet to be committed, exists in a limbo state - until comitted.
+ * buffer yet to be committed, exists in a limbo state - until committed.
  * It is only safe to write to a buffer while it is in limbo.
  *
  * Invariant: last-index refers to the buffer that is safe to write while in
  * limbo-state. Outside limbo state, last-index refers one buffer ahead of what
  * has been enqueued.
  *
- * There are essentialy two APIs, distinguished by the buffer-type:
+ * There are essentially two APIs, distinguished by the buffer-type:
  *  API 1 Value-type   : MFIFO_DEFINE(name1, sizeof(struct foo), cnt1);
  *  API 2 Pointer-type : MFIFO_DEFINE(name2, sizeof(void *),     cnt2);
  *
@@ -41,28 +41,26 @@
  *       different, but it is trailing and sizeof is not applied here, so it can
  *       be a flexible array member.
  */
-#define MFIFO_DEFINE(name, sz, cnt)                                         \
-		struct {                                                    \
-			/* TODO: const, optimise RAM use */                 \
-			/* TODO: Separate s,n,f,l out into common struct */ \
-			u8_t const s;         /* Stride between elements */ \
-			u8_t const n;         /* Number of buffers */       \
-			u8_t f;               /* First. Read index */       \
-			u8_t l;               /* Last. Write index */       \
-			u8_t MALIGN(4) m[MROUND(sz) * ((cnt) + 1)];         \
-		} mfifo_##name = {                                          \
-			.n = ((cnt) + 1),                                   \
-			.s = MROUND(sz),                                    \
-			.f = 0,                                             \
-			.l = 0,                                             \
-		}
+#define MFIFO_DEFINE(name, sz, cnt) \
+		const struct { \
+			uint16_t s; /* Stride between elements */ \
+			uint16_t n; /* Number of buffers */ \
+		} mfifo_##name = { \
+			.s = MROUND(sz), \
+			.n = ((cnt) + 1), \
+		}; \
+		static struct { \
+			uint8_t MALIGN(4) m[MROUND(sz) * ((cnt) + 1)]; \
+			uint8_t f; /* First. Read index */ \
+			uint8_t l; /* Last. Write index */ \
+		} mfifo_fifo_##name;
 
 /**
  * @brief   Initialize an MFIFO to be empty
  * @details API 1 and 2. An MFIFO is empty if first == last
  */
 #define MFIFO_INIT(name) \
-	mfifo_##name.f = mfifo_##name.l = 0
+	mfifo_fifo_##name.f = mfifo_fifo_##name.l = 0
 
 /**
  * @brief   Non-destructive: Allocate buffer from the queue's tail, by index
@@ -79,8 +77,8 @@
  * @param idx[out]  Index of newly allocated buffer
  * @return  True if buffer could be allocated; otherwise false
  */
-static inline bool mfifo_enqueue_idx_get(u8_t count, u8_t first, u8_t last,
-					 u8_t *idx)
+static inline bool mfifo_enqueue_idx_get(uint8_t count, uint8_t first,
+					 uint8_t last, uint8_t *idx)
 {
 	/* Non-destructive: Advance write-index modulo 'count' */
 	last = last + 1;
@@ -109,20 +107,21 @@ static inline bool mfifo_enqueue_idx_get(u8_t count, u8_t first, u8_t last,
  * @return  True if buffer could be allocated; otherwise false
  */
 #define MFIFO_ENQUEUE_IDX_GET(name, i) \
-		mfifo_enqueue_idx_get(mfifo_##name.n, mfifo_##name.f, \
-				      mfifo_##name.l, (i))
+		mfifo_enqueue_idx_get(mfifo_##name.n, mfifo_fifo_##name.f, \
+				      mfifo_fifo_##name.l, (i))
 
 /**
  * @brief   Commit a previously allocated buffer (=void-ptr)
  * @details API 2
  */
-static inline void mfifo_by_idx_enqueue(u8_t *fifo, u8_t size, u8_t idx,
-					void *mem, u8_t *last)
+static inline void mfifo_by_idx_enqueue(uint8_t *fifo, uint8_t size,
+					uint8_t idx, void *mem, uint8_t *last)
 {
 	/* API 2: fifo is array of void-ptrs */
 	void **p = (void **)(fifo + (*last) * size); /* buffer preceding idx */
 	*p = mem; /* store the payload which for API 2 is only a void-ptr */
 
+	cpu_dmb(); /* Ensure data accesses are synchronized */
 	*last = idx; /* Commit: Update write index */
 }
 
@@ -131,8 +130,8 @@ static inline void mfifo_by_idx_enqueue(u8_t *fifo, u8_t size, u8_t idx,
  * @details API 2
  */
 #define MFIFO_BY_IDX_ENQUEUE(name, i, mem) \
-		mfifo_by_idx_enqueue(mfifo_##name.m, mfifo_##name.s, (i), \
-				     (mem), &mfifo_##name.l)
+		mfifo_by_idx_enqueue(mfifo_fifo_##name.m, mfifo_##name.s, (i), \
+				     (mem), &mfifo_fifo_##name.l)
 
 /**
  * @brief   Non-destructive: Allocate buffer from named queue
@@ -141,10 +140,11 @@ static inline void mfifo_by_idx_enqueue(u8_t *fifo, u8_t size, u8_t idx,
  *   To commit the enqueue process, mfifo_enqueue() must be called afterwards
  * @return  Index of newly allocated buffer; only valid if mem != NULL
  */
-static inline u8_t mfifo_enqueue_get(u8_t *fifo, u8_t size, u8_t count,
-				     u8_t first, u8_t last, void **mem)
+static inline uint8_t mfifo_enqueue_get(uint8_t *fifo, uint8_t size,
+					uint8_t count, uint8_t first,
+					uint8_t last, void **mem)
 {
-	u8_t idx;
+	uint8_t idx;
 
 	/* Attempt to allocate new buffer (idx) */
 	if (!mfifo_enqueue_idx_get(count, first, last, &idx)) {
@@ -171,9 +171,9 @@ static inline u8_t mfifo_enqueue_get(u8_t *fifo, u8_t size, u8_t count,
  * @return Index to the buffer one-ahead of allocated buffer
  */
 #define MFIFO_ENQUEUE_GET(name, mem) \
-		mfifo_enqueue_get(mfifo_##name.m, mfifo_##name.s, \
-				  mfifo_##name.n, mfifo_##name.f, \
-				  mfifo_##name.l, (mem))
+		mfifo_enqueue_get(mfifo_fifo_##name.m, mfifo_##name.s, \
+				  mfifo_##name.n, mfifo_fifo_##name.f, \
+				  mfifo_fifo_##name.l, (mem))
 
 /**
  * @brief   Atomically commit a previously allocated buffer
@@ -187,8 +187,9 @@ static inline u8_t mfifo_enqueue_get(u8_t *fifo, u8_t size, u8_t count,
  * @param idx[in]   Index one-ahead of previously allocated buffer
  * @param last[out] Write-index
  */
-static inline void mfifo_enqueue(u8_t idx, u8_t *last)
+static inline void mfifo_enqueue(uint8_t idx, uint8_t *last)
 {
+	cpu_dmb(); /* Ensure data accesses are synchronized */
 	*last = idx; /* Commit: Update write index */
 }
 
@@ -199,14 +200,15 @@ static inline void mfifo_enqueue(u8_t idx, u8_t *last)
  * @param idx[in]  Index one-ahead of previously allocated buffer
  */
 #define MFIFO_ENQUEUE(name, idx) \
-		mfifo_enqueue((idx), &mfifo_##name.l)
+		mfifo_enqueue((idx), &mfifo_fifo_##name.l)
 
 /**
  * @brief Number of available buffers
  * @details API 1 and 2
  *   Empty if first == last
  */
-static inline u8_t mfifo_avail_count_get(u8_t count, u8_t first, u8_t last)
+static inline uint8_t mfifo_avail_count_get(uint8_t count, uint8_t first,
+					    uint8_t last)
 {
 	if (last >= first) {
 		return last - first;
@@ -220,15 +222,15 @@ static inline u8_t mfifo_avail_count_get(u8_t count, u8_t first, u8_t last)
  * @details API 1 and 2
  */
 #define MFIFO_AVAIL_COUNT_GET(name) \
-		mfifo_avail_count_get(mfifo_##name.n, mfifo_##name.f, \
-				      mfifo_##name.l)
+		mfifo_avail_count_get(mfifo_##name.n, mfifo_fifo_##name.f, \
+				      mfifo_fifo_##name.l)
 
 /**
  * @brief Non-destructive peek
  * @details API 1
  */
-static inline void *mfifo_dequeue_get(u8_t *fifo, u8_t size, u8_t first,
-				      u8_t last)
+static inline void *mfifo_dequeue_get(uint8_t *fifo, uint8_t size,
+				      uint8_t first, uint8_t last)
 {
 	if (first == last) {
 		return NULL;
@@ -242,15 +244,15 @@ static inline void *mfifo_dequeue_get(u8_t *fifo, u8_t size, u8_t first,
  * @details API 1
  */
 #define MFIFO_DEQUEUE_GET(name) \
-		mfifo_dequeue_get(mfifo_##name.m, mfifo_##name.s, \
-				   mfifo_##name.f, mfifo_##name.l)
+		mfifo_dequeue_get(mfifo_fifo_##name.m, mfifo_##name.s, \
+				   mfifo_fifo_##name.f, mfifo_fifo_##name.l)
 
 /**
  * @brief Non-destructive: Peek at head (oldest) buffer
  * @details API 2
  */
-static inline void *mfifo_dequeue_peek(u8_t *fifo, u8_t size, u8_t first,
-				       u8_t last)
+static inline void *mfifo_dequeue_peek(uint8_t *fifo, uint8_t size,
+				       uint8_t first, uint8_t last)
 {
 	if (first == last) {
 		return NULL; /* Queue is empty */
@@ -265,14 +267,15 @@ static inline void *mfifo_dequeue_peek(u8_t *fifo, u8_t size, u8_t first,
  * @details API 2
  */
 #define MFIFO_DEQUEUE_PEEK(name) \
-		mfifo_dequeue_peek(mfifo_##name.m, mfifo_##name.s, \
-				   mfifo_##name.f, mfifo_##name.l)
+		mfifo_dequeue_peek(mfifo_fifo_##name.m, mfifo_##name.s, \
+				   mfifo_fifo_##name.f, mfifo_fifo_##name.l)
 
-static inline void *mfifo_dequeue_iter_get(u8_t *fifo, u8_t size, u8_t count,
-					   u8_t first, u8_t last, u8_t *idx)
+static inline void *mfifo_dequeue_iter_get(uint8_t *fifo, uint8_t size,
+					   uint8_t count, uint8_t first,
+					   uint8_t last, uint8_t *idx)
 {
 	void *p;
-	u8_t i;
+	uint8_t i;
 
 	if (*idx >= count) {
 		*idx = first;
@@ -295,24 +298,24 @@ static inline void *mfifo_dequeue_iter_get(u8_t *fifo, u8_t size, u8_t count,
 }
 
 #define MFIFO_DEQUEUE_ITER_GET(name, idx) \
-		mfifo_dequeue_iter_get(mfifo_##name.m, mfifo_##name.s, \
-				       mfifo_##name.n, mfifo_##name.f, \
-				       mfifo_##name.l, (idx))
+		mfifo_dequeue_iter_get(mfifo_fifo_##name.m, mfifo_##name.s, \
+				       mfifo_##name.n, mfifo_fifo_##name.f, \
+				       mfifo_fifo_##name.l, (idx))
 
 /**
  * @brief Dequeue head-buffer from queue of buffers
  *
- * @param fifo[in]      Contigous memory holding the circular queue
+ * @param fifo[in]      Contiguous memory holding the circular queue
  * @param size[in]      Size of each buffer in circular queue
  * @param count[in]     Number of buffers in circular queue
  * @param last[in]      Tail index, Span: [0 .. count-1]
  * @param first[in,out] Head index, Span: [0 .. count-1]. Will be updated
  * @return              Head buffer; or NULL if queue was empty
  */
-static inline void *mfifo_dequeue(u8_t *fifo, u8_t size, u8_t count,
-				  u8_t last, u8_t *first)
+static inline void *mfifo_dequeue(uint8_t *fifo, uint8_t size, uint8_t count,
+				  uint8_t last, uint8_t *first)
 {
-	u8_t _first = *first; /* Copy read-index */
+	uint8_t _first = *first; /* Copy read-index */
 	void *mem;
 
 	/* Queue is empty if first == last */
@@ -343,6 +346,6 @@ static inline void *mfifo_dequeue(u8_t *fifo, u8_t size, u8_t count,
  * @return          Head buffer; or NULL if queue was empty
  */
 #define MFIFO_DEQUEUE(name) \
-		mfifo_dequeue(mfifo_##name.m, mfifo_##name.s, \
-			      mfifo_##name.n, mfifo_##name.l, \
-			      &mfifo_##name.f)
+		mfifo_dequeue(mfifo_fifo_##name.m, mfifo_##name.s, \
+			      mfifo_##name.n, mfifo_fifo_##name.l, \
+			      &mfifo_fifo_##name.f)

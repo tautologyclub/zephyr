@@ -1,13 +1,10 @@
----
-title: NXP PCA9633 LED Driver
-version: 0.1
+description: NXP PCA9633 LED
 
-description: NXP PCA9633 LED binding
+compatible: "nxp,pca9633"
 
-inherits:
-    !include i2c-device.yaml
+include: i2c-device.yaml
 
 properties:
-    compatible:
-      constraint: "nxp,pca9633"
-...
+  disable-allcall:
+    type: boolean
+    description: Disable response to LED All Call address request

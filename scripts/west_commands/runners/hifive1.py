@@ -13,7 +13,7 @@ class HiFive1BinaryRunner(ZephyrBinaryRunner):
     '''Runner front-end for the HiFive1 board, using openocd.'''
 
     def __init__(self, cfg):
-        super(HiFive1BinaryRunner, self).__init__(cfg)
+        super().__init__(cfg)
         self.openocd_config = path.join(cfg.board_dir, 'support', 'openocd.cfg')
 
     @classmethod
@@ -29,13 +29,15 @@ class HiFive1BinaryRunner(ZephyrBinaryRunner):
         pass
 
     @classmethod
-    def create(cls, cfg, args):
+    def do_create(cls, cfg, args):
         if cfg.gdb is None:
             raise ValueError('--gdb not provided at command line')
 
         return HiFive1BinaryRunner(cfg)
 
     def do_run(self, command, **kwargs):
+        self.require(self.cfg.openocd)
+        self.require(self.cfg.gdb)
         openocd_cmd = ([self.cfg.openocd, '-f', self.openocd_config])
         gdb_cmd = ([self.cfg.gdb, self.cfg.elf_file, '--batch',
                     '-ex', 'set remotetimeout 240',

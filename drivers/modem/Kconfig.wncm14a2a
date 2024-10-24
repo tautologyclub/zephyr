@@ -1,20 +1,13 @@
-# Kconfig - WNCM 14A2A driver options
+# WNCM 14A2A driver options
 
-#
 # Copyright (c) 2018 Foundries.io
-#
 # SPDX-License-Identifier: Apache-2.0
-#
 
 menuconfig MODEM_WNCM14A2A
-	bool "Enable Wistron LTE-M modem driver"
+	bool "Wistron LTE-M modem driver"
 	select MODEM_RECEIVER
 	select NET_OFFLOAD
 	imply GPIO
-	select UART_MCUX_2 if BOARD_FRDM_K64F
-	select GPIO_NRF_P1 if SOC_NRF52840
-	select UART_1_NRF_UARTE if SOC_NRF52840
-	select UART_1_NRF_FLOW_CONTROL if SOC_NRF52840
 	help
 	  Choose this setting to enable Wistron WNC-M14A2A LTE-M modem driver.
 	  NOTE: Currently the pin settings only work with FRDM K64F shield.

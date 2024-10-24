@@ -4,13 +4,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#define DT_DRV_COMPAT sifive_i2c0
+
 #define LOG_LEVEL CONFIG_I2C_LOG_LEVEL
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(i2c_sifive);
 
-#include <device.h>
-#include <i2c.h>
-#include <sys_io.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/i2c.h>
+#include <soc.h>
+#include <zephyr/sys/sys_io.h>
 
 #include "i2c-priv.h"
 
@@ -58,30 +61,30 @@ LOG_MODULE_REGISTER(i2c_sifive);
 /* Structure declarations */
 
 struct i2c_sifive_cfg {
-	u32_t base;
-	u32_t f_sys;
-	u32_t f_bus;
+	uint32_t base;
+	uint32_t f_sys;
+	uint32_t f_bus;
 };
 
 /* Helper functions */
 
-static inline bool i2c_sifive_busy(struct device *dev)
+static inline bool i2c_sifive_busy(const struct device *dev)
 {
-	const struct i2c_sifive_cfg *config = dev->config->config_info;
+	const struct i2c_sifive_cfg *config = dev->config;
 
 	return IS_SET(config, REG_STATUS, SF_STATUS_TIP);
 }
 
-static int i2c_sifive_send_addr(struct device *dev,
-				u16_t addr,
-				u16_t rw_flag)
+static int i2c_sifive_send_addr(const struct device *dev,
+				uint16_t addr,
+				uint16_t rw_flag)
 {
-	const struct i2c_sifive_cfg *config = dev->config->config_info;
-	u8_t command = 0U;
+	const struct i2c_sifive_cfg *config = dev->config;
+	uint8_t command = 0U;
 
 	/* Wait for a previous transfer to complete */
-	while (i2c_sifive_busy(dev))
-		;
+	while (i2c_sifive_busy(dev)) {
+	}
 
 	/* Set transmit register to address with read/write flag */
 	sys_write8((addr | rw_flag), I2C_REG(config, REG_TRANSMIT));
@@ -92,8 +95,8 @@ static int i2c_sifive_send_addr(struct device *dev,
 	/* Write the command register to start the transfer */
 	sys_write8(command, I2C_REG(config, REG_COMMAND));
 
-	while (i2c_sifive_busy(dev))
-		;
+	while (i2c_sifive_busy(dev)) {
+	}
 
 	if (IS_SET(config, REG_STATUS, SF_STATUS_RXACK)) {
 		LOG_ERR("I2C Rx failed to acknowledge\n");
@@ -103,13 +106,13 @@ static int i2c_sifive_send_addr(struct device *dev,
 	return 0;
 }
 
-static int i2c_sifive_write_msg(struct device *dev,
+static int i2c_sifive_write_msg(const struct device *dev,
 				struct i2c_msg *msg,
-				u16_t addr)
+				uint16_t addr)
 {
-	const struct i2c_sifive_cfg *config = dev->config->config_info;
+	const struct i2c_sifive_cfg *config = dev->config;
 	int rc = 0;
-	u8_t command = 0U;
+	uint8_t command = 0U;
 
 	rc = i2c_sifive_send_addr(dev, addr, SF_TX_WRITE);
 	if (rc != 0) {
@@ -117,10 +120,10 @@ static int i2c_sifive_write_msg(struct device *dev,
 		return rc;
 	}
 
-	for (u32_t i = 0; i < msg->len; i++) {
+	for (uint32_t i = 0; i < msg->len; i++) {
 		/* Wait for a previous transfer */
-		while (i2c_sifive_busy(dev))
-			;
+		while (i2c_sifive_busy(dev)) {
+		}
 
 		/* Put data in transmit reg */
 		sys_write8((msg->buf)[i], I2C_REG(config, REG_TRANSMIT));
@@ -140,8 +143,8 @@ static int i2c_sifive_write_msg(struct device *dev,
 		sys_write8(command, I2C_REG(config, REG_COMMAND));
 
 		/* Wait for a previous transfer */
-		while (i2c_sifive_busy(dev))
-			;
+		while (i2c_sifive_busy(dev)) {
+		}
 
 		if (IS_SET(config, REG_STATUS, SF_STATUS_RXACK)) {
 			LOG_ERR("I2C Rx failed to acknowledge\n");
@@ -152,17 +155,17 @@ static int i2c_sifive_write_msg(struct device *dev,
 	return 0;
 }
 
-static int i2c_sifive_read_msg(struct device *dev,
+static int i2c_sifive_read_msg(const struct device *dev,
 			       struct i2c_msg *msg,
-			       u16_t addr)
+			       uint16_t addr)
 {
-	const struct i2c_sifive_cfg *config = dev->config->config_info;
-	u8_t command = 0U;
+	const struct i2c_sifive_cfg *config = dev->config;
+	uint8_t command = 0U;
 
 	i2c_sifive_send_addr(dev, addr, SF_TX_READ);
 
-	while (i2c_sifive_busy(dev))
-		;
+	while (i2c_sifive_busy(dev)) {
+	}
 
 	for (int i = 0; i < msg->len; i++) {
 		/* Generate command byte */
@@ -183,8 +186,8 @@ static int i2c_sifive_read_msg(struct device *dev,
 		sys_write8(command, I2C_REG(config, REG_COMMAND));
 
 		/* Wait for the read to complete */
-		while (i2c_sifive_busy(dev))
-			;
+		while (i2c_sifive_busy(dev)) {
+		}
 
 		/* Store the received byte */
 		(msg->buf)[i] = sys_read8(I2C_REG(config, REG_RECEIVE));
@@ -195,23 +198,18 @@ static int i2c_sifive_read_msg(struct device *dev,
 
 /* API Functions */
 
-static int i2c_sifive_configure(struct device *dev, u32_t dev_config)
+static int i2c_sifive_configure(const struct device *dev, uint32_t dev_config)
 {
 	const struct i2c_sifive_cfg *config = NULL;
-	u32_t i2c_speed = 0U;
-	u16_t prescale = 0U;
+	uint32_t i2c_speed = 0U;
+	uint16_t prescale = 0U;
 
 	/* Check for NULL pointers */
 	if (dev == NULL) {
 		LOG_ERR("Device handle is NULL");
 		return -EINVAL;
 	}
-	if (dev->config == NULL) {
-		LOG_ERR("Device handle config is NULL");
-		return -EINVAL;
-	}
-
-	config = dev->config->config_info;
+	config = dev->config;
 	if (config == NULL) {
 		LOG_ERR("Device config is NULL");
 		return -EINVAL;
@@ -240,12 +238,12 @@ static int i2c_sifive_configure(struct device *dev, u32_t dev_config)
 	prescale = (config->f_sys / (i2c_speed * 5U)) - 1;
 
 	/* Configure peripheral with calculated prescale */
-	sys_write8((u8_t) (0xFF & prescale), I2C_REG(config, REG_PRESCALE_LOW));
-	sys_write8((u8_t) (0xFF & (prescale >> 8)),
+	sys_write8((uint8_t) (0xFF & prescale), I2C_REG(config, REG_PRESCALE_LOW));
+	sys_write8((uint8_t) (0xFF & (prescale >> 8)),
 		   I2C_REG(config, REG_PRESCALE_HIGH));
 
 	/* Support I2C Master mode only */
-	if (!(dev_config & I2C_MODE_MASTER)) {
+	if (!(dev_config & I2C_MODE_CONTROLLER)) {
 		LOG_ERR("I2C only supports operation as master");
 		return -ENOTSUP;
 	}
@@ -265,10 +263,10 @@ static int i2c_sifive_configure(struct device *dev, u32_t dev_config)
 	return 0;
 }
 
-static int i2c_sifive_transfer(struct device *dev,
+static int i2c_sifive_transfer(const struct device *dev,
 			       struct i2c_msg *msgs,
-			       u8_t num_msgs,
-			       u16_t addr)
+			       uint8_t num_msgs,
+			       uint16_t addr)
 {
 	int rc = 0;
 
@@ -278,10 +276,6 @@ static int i2c_sifive_transfer(struct device *dev,
 		return -EINVAL;
 	}
 	if (dev->config == NULL) {
-		LOG_ERR("Device handle config is NULL");
-		return -EINVAL;
-	}
-	if (dev->config->config_info == NULL) {
 		LOG_ERR("Device config is NULL");
 		return -EINVAL;
 	}
@@ -305,13 +299,13 @@ static int i2c_sifive_transfer(struct device *dev,
 	return 0;
 };
 
-static int i2c_sifive_init(struct device *dev)
+static int i2c_sifive_init(const struct device *dev)
 {
-	const struct i2c_sifive_cfg *config = dev->config->config_info;
-	u32_t dev_config = 0U;
+	const struct i2c_sifive_cfg *config = dev->config;
+	uint32_t dev_config = 0U;
 	int rc = 0;
 
-	dev_config = (I2C_MODE_MASTER | i2c_map_dt_bitrate(config->f_bus));
+	dev_config = (I2C_MODE_CONTROLLER | i2c_map_dt_bitrate(config->f_bus));
 
 	rc = i2c_sifive_configure(dev, dev_config);
 	if (rc != 0) {
@@ -322,30 +316,29 @@ static int i2c_sifive_init(struct device *dev)
 	return 0;
 }
 
-
-static struct i2c_driver_api i2c_sifive_api = {
+static const struct i2c_driver_api i2c_sifive_api = {
 	.configure = i2c_sifive_configure,
 	.transfer = i2c_sifive_transfer,
+#ifdef CONFIG_I2C_RTIO
+	.iodev_submit = i2c_iodev_submit_fallback,
+#endif
 };
 
 /* Device instantiation */
 
 #define I2C_SIFIVE_INIT(n) \
 	static struct i2c_sifive_cfg i2c_sifive_cfg_##n = { \
-		.base = DT_SIFIVE_I2C0_##n##_BASE_ADDRESS, \
-		.f_sys = DT_SIFIVE_I2C0_##n##_INPUT_FREQUENCY, \
-		.f_bus = DT_SIFIVE_I2C0_##n##_CLOCK_FREQUENCY, \
+		.base = DT_INST_REG_ADDR(n), \
+		.f_sys = SIFIVE_PERIPHERAL_CLOCK_FREQUENCY, \
+		.f_bus = DT_INST_PROP(n, clock_frequency), \
 	}; \
-	DEVICE_AND_API_INIT(i2c_##n, \
-			    DT_SIFIVE_I2C0_##n##_LABEL, \
+	I2C_DEVICE_DT_INST_DEFINE(n, \
 			    i2c_sifive_init, \
+			    NULL, \
 			    NULL, \
 			    &i2c_sifive_cfg_##n, \
 			    POST_KERNEL, \
 			    CONFIG_I2C_INIT_PRIORITY, \
-			    &i2c_sifive_api)
+			    &i2c_sifive_api);
 
-#ifdef DT_SIFIVE_I2C0_0_LABEL
-I2C_SIFIVE_INIT(0);
-#endif
-
+DT_INST_FOREACH_STATUS_OKAY(I2C_SIFIVE_INIT)

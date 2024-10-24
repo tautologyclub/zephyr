@@ -1,10 +1,13 @@
-.. _lsm6dsl:
+.. zephyr:code-sample:: lsmd6dsl
+   :name: LSM6DSL IMU sensor
+   :relevant-api: sensor_interface
 
-LSM6DSL: IMU sensor Monitor
-###########################
+   Get accelerometer and gyroscope data from an LSM6DSL sensor (polling & trigger
+   mode).
 
 Overview
 ********
+
 This sample sets the LSM6DSL accelerometer and gyroscope to 104Hz
 and enable a trigger on data ready. It displays on the console the
 values for accelerometer and gyroscope, plus optionally the values of
@@ -20,7 +23,7 @@ It has been tested on both :ref:`96b_argonkey` and disco_l475_iot1 board.
 References
 **********
 
-- LSM6DSL http://www.st.com/en/mems-and-sensors/lsm6dsl.html
+- LSM6DSL https://www.st.com/en/mems-and-sensors/lsm6dsl.html
 
 Building and Running
 ********************
@@ -32,7 +35,7 @@ Building on ArgonKey board
 ==========================
 
 .. zephyr-app-commands::
-   :zephyr-app: samples/sensors/lsm6dsl
+   :zephyr-app: samples/sensor/lsm6dsl
    :host-os: unix
    :board: 96b_argonkey
    :goals: build
@@ -42,9 +45,20 @@ Building on disco_l475_iot1 board
 =================================
 
 .. zephyr-app-commands::
-   :zephyr-app: samples/sensors/lsm6dsl
+   :zephyr-app: samples/sensor/lsm6dsl
    :host-os: unix
    :board: disco_l475_iot1
+   :goals: build
+   :compact:
+
+Building on nrf52840dk/nrf52840 board with x-nucleo-iks01a2 shield
+==================================================================
+
+.. zephyr-app-commands::
+   :zephyr-app: samples/sensor/lsm6dsl
+   :host-os: unix
+   :board: nrf52840dk/nrf52840
+   :shield: x_nucleo_iks01a2
    :goals: build
    :compact:
 
@@ -63,4 +77,3 @@ Sample Output
     <repeats endlessly every 2 seconds>
 
 .. note:: The magn row is displayed only when running sample onto 96b_argonkey board, where a magnetometer is connected to LSM6DSL.
-

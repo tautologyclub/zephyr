@@ -16,13 +16,13 @@
  * function __stack_chk_fail and global variable __stack_chk_guard.
  */
 
-#include <toolchain.h> /* compiler specific configurations */
+#include <zephyr/toolchain.h> /* compiler specific configurations */
 
-#include <kernel_structs.h>
-#include <toolchain.h>
-#include <linker/sections.h>
-#include <kernel.h>
-#include <app_memory/app_memdomain.h>
+#include <zephyr/kernel_structs.h>
+#include <zephyr/toolchain.h>
+#include <zephyr/linker/sections.h>
+#include <zephyr/kernel.h>
+#include <zephyr/app_memory/app_memdomain.h>
 
 /**
  *
@@ -32,12 +32,12 @@
  *
  * @return Does not return
  */
-void FUNC_NORETURN _StackCheckHandler(void)
+void _StackCheckHandler(void)
 {
 	/* Stack canary error is a software fatal condition; treat it as such.
 	 */
-	z_except_reason(_NANO_ERR_STACK_CHK_FAIL);
-	CODE_UNREACHABLE;
+	z_except_reason(K_ERR_STACK_CHK_FAIL);
+	CODE_UNREACHABLE; /* LCOV_EXCL_LINE */
 }
 
 /* Global variable */
@@ -46,10 +46,12 @@ void FUNC_NORETURN _StackCheckHandler(void)
  * Symbol referenced by GCC compiler generated code for canary value.
  * The canary value gets initialized in z_cstart().
  */
-#ifdef CONFIG_USERSPACE
-K_APP_DMEM(z_libc_partition) uintptr_t __stack_chk_guard;
+#ifdef CONFIG_STACK_CANARIES_TLS
+Z_THREAD_LOCAL volatile uintptr_t __stack_chk_guard;
+#elif CONFIG_USERSPACE
+K_APP_DMEM(z_libc_partition) volatile uintptr_t __stack_chk_guard;
 #else
-__noinit uintptr_t __stack_chk_guard;
+__noinit volatile uintptr_t __stack_chk_guard;
 #endif
 
 /**

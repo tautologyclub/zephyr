@@ -7,20 +7,30 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_DECLARE(net_echo_client_sample, LOG_LEVEL_DBG);
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <errno.h>
 #include <stdio.h>
 
-#include <net/socket.h>
-#include <net/tls_credentials.h>
+#include <zephyr/net/socket.h>
+#include <zephyr/net/tls_credentials.h>
+#include <zephyr/random/random.h>
 
 #include "common.h"
 #include "ca_certificate.h"
 
 #define RECV_BUF_SIZE 128
+
+/* These proxy server addresses are only used when CONFIG_SOCKS
+ * is enabled. To connect to a proxy server that is not running
+ * under the same IP as the peer or uses a different port number,
+ * modify the values.
+ */
+#define SOCKS5_PROXY_V6_ADDR CONFIG_NET_CONFIG_PEER_IPV6_ADDR
+#define SOCKS5_PROXY_V4_ADDR CONFIG_NET_CONFIG_PEER_IPV4_ADDR
+#define SOCKS5_PROXY_PORT 1080
 
 static ssize_t sendall(int sock, const void *buf, size_t len)
 {
@@ -37,7 +47,7 @@ static ssize_t sendall(int sock, const void *buf, size_t len)
 	return 0;
 }
 
-static int send_tcp_data(struct data *data)
+static int send_tcp_data(struct sample_data *data)
 {
 	int ret;
 
@@ -53,14 +63,16 @@ static int send_tcp_data(struct data *data)
 		LOG_ERR("%s TCP: Failed to send data, errno %d", data->proto,
 			errno);
 	} else {
-		LOG_DBG("%s TCP: Sent %d bytes", data->proto,
-			data->tcp.expecting);
+		if (PRINT_PROGRESS) {
+			LOG_DBG("%s TCP: Sent %d bytes", data->proto,
+				data->tcp.expecting);
+		}
 	}
 
 	return ret;
 }
 
-static int compare_tcp_data(struct data *data, const char *buf, u32_t received)
+static int compare_tcp_data(struct sample_data *data, const char *buf, uint32_t received)
 {
 	if (data->tcp.received + received > data->tcp.expecting) {
 		LOG_ERR("Too much data received: TCP %s", data->proto);
@@ -75,15 +87,16 @@ static int compare_tcp_data(struct data *data, const char *buf, u32_t received)
 	return 0;
 }
 
-static int start_tcp_proto(struct data *data, struct sockaddr *addr,
-			   socklen_t addrlen)
+static int start_tcp_proto(struct sample_data *data, sa_family_t family,
+			   struct sockaddr *addr, socklen_t addrlen)
 {
+	int optval;
 	int ret;
 
 #if defined(CONFIG_NET_SOCKETS_SOCKOPT_TLS)
-	data->tcp.sock = socket(addr->sa_family, SOCK_STREAM, IPPROTO_TLS_1_2);
+	data->tcp.sock = socket(family, SOCK_STREAM, IPPROTO_TLS_1_2);
 #else
-	data->tcp.sock = socket(addr->sa_family, SOCK_STREAM, IPPROTO_TCP);
+	data->tcp.sock = socket(family, SOCK_STREAM, IPPROTO_TCP);
 #endif
 	if (data->tcp.sock < 0) {
 		LOG_ERR("Failed to create TCP socket (%s): %d", data->proto,
@@ -91,9 +104,45 @@ static int start_tcp_proto(struct data *data, struct sockaddr *addr,
 		return -errno;
 	}
 
+	if (IS_ENABLED(CONFIG_SOCKS)) {
+		struct sockaddr proxy_addr;
+		socklen_t proxy_addrlen;
+
+		if (family == AF_INET) {
+			struct sockaddr_in *proxy4 =
+				(struct sockaddr_in *)&proxy_addr;
+
+			proxy4->sin_family = AF_INET;
+			proxy4->sin_port = htons(SOCKS5_PROXY_PORT);
+			inet_pton(AF_INET, SOCKS5_PROXY_V4_ADDR,
+				  &proxy4->sin_addr);
+			proxy_addrlen = sizeof(struct sockaddr_in);
+		} else if (family == AF_INET6) {
+			struct sockaddr_in6 *proxy6 =
+				(struct sockaddr_in6 *)&proxy_addr;
+
+			proxy6->sin6_family = AF_INET6;
+			proxy6->sin6_port = htons(SOCKS5_PROXY_PORT);
+			inet_pton(AF_INET6, SOCKS5_PROXY_V6_ADDR,
+				  &proxy6->sin6_addr);
+			proxy_addrlen = sizeof(struct sockaddr_in6);
+		} else {
+			return -EINVAL;
+		}
+
+		ret = setsockopt(data->tcp.sock, SOL_SOCKET, SO_SOCKS5,
+				 &proxy_addr, proxy_addrlen);
+		if (ret < 0) {
+			return ret;
+		}
+	}
+
 #if defined(CONFIG_NET_SOCKETS_SOCKOPT_TLS)
 	sec_tag_t sec_tag_list[] = {
 		CA_CERTIFICATE_TAG,
+#if defined(CONFIG_MBEDTLS_KEY_EXCHANGE_PSK_ENABLED)
+		PSK_TAG,
+#endif
 	};
 
 	ret = setsockopt(data->tcp.sock, SOL_TLS, TLS_SEC_TAG_LIST,
@@ -113,6 +162,14 @@ static int start_tcp_proto(struct data *data, struct sockaddr *addr,
 	}
 #endif
 
+	/* Prefer IPv6 temporary addresses */
+	if (family == AF_INET6) {
+		optval = IPV6_PREFER_SRC_TMP;
+		(void)setsockopt(data->tcp.sock, IPPROTO_IPV6,
+				 IPV6_ADDR_PREFERENCES,
+				 &optval, sizeof(optval));
+	}
+
 	ret = connect(data->tcp.sock, addr, addrlen);
 	if (ret < 0) {
 		LOG_ERR("Cannot connect to TCP remote (%s): %d", data->proto,
@@ -123,7 +180,7 @@ static int start_tcp_proto(struct data *data, struct sockaddr *addr,
 	return ret;
 }
 
-static int process_tcp_proto(struct data *data)
+static int process_tcp_proto(struct sample_data *data)
 {
 	int ret, received;
 	char buf[RECV_BUF_SIZE];
@@ -155,10 +212,11 @@ static int process_tcp_proto(struct data *data)
 			continue;
 		}
 
-		/* Response complete */
-		LOG_DBG("%s TCP: Received and compared %d bytes, all ok",
-			data->proto, data->tcp.received);
-
+		if (PRINT_PROGRESS) {
+			/* Response complete */
+			LOG_DBG("%s TCP: Received and compared %d bytes, all ok",
+				data->proto, data->tcp.received);
+		}
 
 		if (++data->tcp.counter % 1000 == 0U) {
 			LOG_INF("%s TCP: Exchanged %u packets", data->proto,
@@ -184,7 +242,8 @@ int start_tcp(void)
 		inet_pton(AF_INET6, CONFIG_NET_CONFIG_PEER_IPV6_ADDR,
 			  &addr6.sin6_addr);
 
-		ret = start_tcp_proto(&conf.ipv6, (struct sockaddr *)&addr6,
+		ret = start_tcp_proto(&conf.ipv6, AF_INET6,
+				      (struct sockaddr *)&addr6,
 				      sizeof(addr6));
 		if (ret < 0) {
 			return ret;
@@ -197,7 +256,8 @@ int start_tcp(void)
 		inet_pton(AF_INET, CONFIG_NET_CONFIG_PEER_IPV4_ADDR,
 			  &addr4.sin_addr);
 
-		ret = start_tcp_proto(&conf.ipv4, (struct sockaddr *)&addr4,
+		ret = start_tcp_proto(&conf.ipv4, AF_INET,
+				      (struct sockaddr *)&addr4,
 				      sizeof(addr4));
 		if (ret < 0) {
 			return ret;

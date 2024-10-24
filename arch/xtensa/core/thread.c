@@ -1,126 +1,190 @@
 /*
- * Copyright (c) 2016 Cadence Design Systems, Inc.
+ * Copyright (c) 2017, 2023 Intel Corporation
+ *
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifdef CONFIG_INIT_STACKS
+#include <errno.h>
 #include <string.h>
-#endif /* CONFIG_INIT_STACKS */
-#ifdef CONFIG_DEBUG
-#include <misc/printk.h>
-#endif
-#include <kernel_structs.h>
-#include <wait_q.h>
-#include <xtensa_config.h>
+
+#include <zephyr/kernel.h>
 #include <kernel_internal.h>
 
-extern void z_xt_user_exit(void);
+#include <xtensa_asm2_context.h>
+#include <xtensa_internal.h>
 
+#include <zephyr/logging/log.h>
+LOG_MODULE_DECLARE(os, CONFIG_KERNEL_LOG_LEVEL);
+
+#ifdef CONFIG_USERSPACE
+
+#ifdef CONFIG_THREAD_LOCAL_STORAGE
 /*
- * @brief Initialize a new thread
- *
- * Any coprocessor context data is put at the lower address of the stack. An
- * initial context, to be "restored" by __return_from_coop(), is put at
- * the other end of the stack, and thus reusable by the stack when not
- * needed anymore.
- *
- * The initial context is a basic stack frame that contains arguments for
- * z_thread_entry() return address, that points at z_thread_entry()
- * and status register.
- *
- * <options> is currently unused.
- *
- * @param thread pointer to k_thread memory
- * @param pStackmem the pointer to aligned stack memory
- * @param stackSize the stack size in bytes
- * @param pEntry thread entry point routine
- * @param p1 first param to entry point
- * @param p2 second param to entry point
- * @param p3 third param to entry point
- * @param priority thread priority
- * @param options is unused (saved for future expansion)
- *
- * @return N/A
+ * Per-thread (TLS) variable indicating whether execution is in user mode.
  */
+Z_THREAD_LOCAL uint32_t is_user_mode;
+#endif
 
-void z_new_thread(struct k_thread *thread, k_thread_stack_t *stack,
-		size_t stackSize, k_thread_entry_t pEntry,
-		void *p1, void *p2, void *p3,
-		int priority, unsigned int options)
+#endif /* CONFIG_USERSPACE */
+
+/**
+ * Initializes a stack area such that it can be "restored" later and
+ * begin running with the specified function and three arguments.  The
+ * entry function takes three arguments to match the signature of
+ * Zephyr's k_thread_entry_t.  Thread will start with EXCM clear and
+ * INTLEVEL set to zero (i.e. it's a user thread, we don't start with
+ * anything masked, so don't assume that!).
+ */
+static void *init_stack(struct k_thread *thread, int *stack_top,
+			void (*entry)(void *, void *, void *),
+			void *arg1, void *arg2, void *arg3)
 {
-	char *pStack = Z_THREAD_STACK_BUFFER(stack);
+	void *ret;
+	_xtensa_irq_stack_frame_a11_t *frame;
+#ifdef CONFIG_USERSPACE
+	struct xtensa_thread_stack_header *header =
+		(struct xtensa_thread_stack_header *)thread->stack_obj;
 
-	/* Align stack end to maximum alignment requirement. */
-	char *stackEnd = (char *)ROUND_DOWN(pStack + stackSize, 16);
-#if XCHAL_CP_NUM > 0
-	u32_t *cpSA;
-	char *cpStack;
+	thread->arch.psp = header->privilege_stack +
+		sizeof(header->privilege_stack);
 #endif
 
-	z_new_thread_init(thread, pStack, stackSize, priority, options);
-
-#ifdef CONFIG_DEBUG
-	printk("\nstackPtr = %p, stackSize = %d\n", pStack, stackSize);
-	printk("stackEnd = %p\n", stackEnd);
-#endif
-#if XCHAL_CP_NUM > 0
-	/* Ensure CP state descriptor is correctly initialized */
-	cpStack = thread->arch.preempCoprocReg.cpStack; /* short hand alias */
-	/* Set to zero to avoid bad surprises */
-	(void)memset(cpStack, 0, XT_CP_ASA);
-	/* Coprocessor's stack is allocated just after the k_thread */
-	cpSA = (u32_t *)(thread->arch.preempCoprocReg.cpStack + XT_CP_ASA);
-	/* Coprocessor's save area alignment is at leat 16 bytes */
-	*cpSA = ROUND_UP(cpSA + 1,
-		(XCHAL_TOTAL_SA_ALIGN < 16 ? 16 : XCHAL_TOTAL_SA_ALIGN));
-#ifdef CONFIG_DEBUG
-	printk("cpStack  = %p\n", thread->arch.preempCoprocReg.cpStack);
-	printk("cpAsa    = %p\n",
-	       *(void **)(thread->arch.preempCoprocReg.cpStack + XT_CP_ASA));
-#endif
-#endif
-	/* Thread's first frame alignment is granted as both operands are
-	 * aligned
+	/* Not-a-cpu ID Ensures that the first time this is run, the
+	 * stack will be invalidated.  That covers the edge case of
+	 * restarting a thread on a stack that had previously been run
+	 * on one CPU, but then initialized on this one, and
+	 * potentially run THERE and not HERE.
 	 */
-	XtExcFrame *pInitCtx =
-		(XtExcFrame *)(stackEnd - (XT_XTRA_SIZE - XT_CP_SIZE));
-#ifdef CONFIG_DEBUG
-	printk("pInitCtx = %p\n", pInitCtx);
-#endif
-	/* Explicitly initialize certain saved registers */
+	thread->arch.last_cpu = -1;
 
-	 /* task entrypoint */
-	pInitCtx->pc   = (u32_t)z_thread_entry;
-
-	/* physical top of stack frame */
-	pInitCtx->a1   = (u32_t)pInitCtx + XT_STK_FRMSZ;
-
-	/* user exception exit dispatcher */
-	pInitCtx->exit = (u32_t)z_xt_user_exit;
-
-	/* Set initial PS to int level 0, EXCM disabled, user mode.
-	 * Also set entry point argument arg.
+	/* We cheat and shave 16 bytes off, the top four words are the
+	 * A0-A3 spill area for the caller of the entry function,
+	 * which doesn't exist.  It will never be touched, so we
+	 * arrange to enter the function with a CALLINC of 1 and a
+	 * stack pointer 16 bytes above the top, so its ENTRY at the
+	 * start will decrement the stack pointer by 16.
 	 */
-#ifdef __XTENSA_CALL0_ABI__
-	pInitCtx->a2 = (u32_t)pEntry;
-	pInitCtx->a3 = (u32_t)p1;
-	pInitCtx->a4 = (u32_t)p2;
-	pInitCtx->a5 = (u32_t)p3;
-	pInitCtx->ps = PS_UM | PS_EXCM;
+	const int bsasz = sizeof(*frame) - 16;
+
+	frame = (void *)(((char *) stack_top) - bsasz);
+
+	(void)memset(frame, 0, bsasz);
+
+	frame->bsa.ps = PS_WOE | PS_UM | PS_CALLINC(1);
+#ifdef CONFIG_USERSPACE
+	if ((thread->base.user_options & K_USER) == K_USER) {
+#ifdef CONFIG_INIT_STACKS
+		/* setup_thread_stack() does not initialize the architecture specific
+		 * privileged stack. So we need to do it manually here as this function
+		 * is called by arch_new_thread() via z_setup_new_thread() after
+		 * setup_thread_stack() but before thread starts running.
+		 *
+		 * Note that only user threads have privileged stacks and kernel
+		 * only threads do not.
+		 */
+		(void)memset(&header->privilege_stack[0], 0xaa, sizeof(header->privilege_stack));
+#endif
+
+		frame->bsa.pc = (uintptr_t)arch_user_mode_enter;
+	} else {
+		frame->bsa.pc = (uintptr_t)z_thread_entry;
+	}
 #else
-	/* For windowed ABI set also WOE and CALLINC
-	 * (pretend task is 'call4')
-	 */
-	pInitCtx->a6 = (u32_t)pEntry;
-	pInitCtx->a7 = (u32_t)p1;
-	pInitCtx->a8 = (u32_t)p2;
-	pInitCtx->a9 = (u32_t)p3;
-	pInitCtx->ps = PS_UM | PS_EXCM | PS_WOE | PS_CALLINC(1);
+	frame->bsa.pc = (uintptr_t)z_thread_entry;
 #endif
-	thread->callee_saved.topOfStack = pInitCtx;
-	thread->arch.flags = 0;
-	/* initial values in all other registers/k_thread entries are
-	 * irrelevant
+
+#if XCHAL_HAVE_THREADPTR
+#ifdef CONFIG_THREAD_LOCAL_STORAGE
+	frame->bsa.threadptr = thread->tls;
+#elif CONFIG_USERSPACE
+	frame->bsa.threadptr = (uintptr_t)((thread->base.user_options & K_USER) ? thread : NULL);
+#endif
+#endif
+
+	/* Arguments to z_thread_entry().  Remember these start at A6,
+	 * which will be rotated into A2 by the ENTRY instruction that
+	 * begins the C function.  And A4-A7 and A8-A11 are optional
+	 * quads that live below the BSA!
 	 */
+	frame->a7 = (uintptr_t)arg1;  /* a7 */
+	frame->a6 = (uintptr_t)entry; /* a6 */
+	frame->a5 = 0;                /* a5 */
+	frame->a4 = 0;                /* a4 */
+
+	frame->a11 = 0;                /* a11 */
+	frame->a10 = 0;                /* a10 */
+	frame->a9  = (uintptr_t)arg3;  /* a9 */
+	frame->a8  = (uintptr_t)arg2;  /* a8 */
+
+	/* Finally push the BSA pointer and return the stack pointer
+	 * as the handle
+	 */
+	frame->ptr_to_bsa = (void *)&frame->bsa;
+	ret = &frame->ptr_to_bsa;
+
+	return ret;
 }
 
+void arch_new_thread(struct k_thread *thread, k_thread_stack_t *stack,
+		     char *stack_ptr, k_thread_entry_t entry,
+		     void *p1, void *p2, void *p3)
+{
+	thread->switch_handle = init_stack(thread, (int *)stack_ptr, entry,
+					   p1, p2, p3);
+#ifdef CONFIG_KERNEL_COHERENCE
+	__ASSERT((((size_t)stack) % XCHAL_DCACHE_LINESIZE) == 0, "");
+	__ASSERT((((size_t)stack_ptr) % XCHAL_DCACHE_LINESIZE) == 0, "");
+	sys_cache_data_flush_and_invd_range(stack, (char *)stack_ptr - (char *)stack);
+#endif
+}
+
+#if defined(CONFIG_FPU) && defined(CONFIG_FPU_SHARING)
+int arch_float_disable(struct k_thread *thread)
+{
+	/* xtensa always has FPU enabled so cannot be disabled */
+	return -ENOTSUP;
+}
+
+int arch_float_enable(struct k_thread *thread, unsigned int options)
+{
+	/* xtensa always has FPU enabled so nothing to do here */
+	return 0;
+}
+#endif /* CONFIG_FPU && CONFIG_FPU_SHARING */
+
+#ifdef CONFIG_USERSPACE
+FUNC_NORETURN void arch_user_mode_enter(k_thread_entry_t user_entry,
+					void *p1, void *p2, void *p3)
+{
+	struct k_thread *current = _current;
+	size_t stack_end;
+
+	/* Transition will reset stack pointer to initial, discarding
+	 * any old context since this is a one-way operation
+	 */
+	stack_end = Z_STACK_PTR_ALIGN(current->stack_info.start +
+				      current->stack_info.size -
+				      current->stack_info.delta);
+
+	xtensa_userspace_enter(user_entry, p1, p2, p3,
+			       stack_end, current->stack_info.start);
+
+	CODE_UNREACHABLE;
+}
+
+int arch_thread_priv_stack_space_get(const struct k_thread *thread, size_t *stack_size,
+				     size_t *unused_ptr)
+{
+	struct xtensa_thread_stack_header *hdr_stack_obj;
+
+	if ((thread->base.user_options & K_USER) != K_USER) {
+		return -EINVAL;
+	}
+
+	hdr_stack_obj = (struct xtensa_thread_stack_header *)thread->stack_obj;
+
+	return z_stack_space_get(&hdr_stack_obj->privilege_stack[0],
+				 sizeof(hdr_stack_obj->privilege_stack),
+				 unused_ptr);
+}
+#endif /* CONFIG_USERSPACE */

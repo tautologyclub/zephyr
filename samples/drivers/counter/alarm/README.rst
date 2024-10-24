@@ -1,13 +1,18 @@
-.. _alarm_sample:
+.. zephyr:code-sample:: alarm
+   :name: Counter Alarm
+   :relevant-api: counter_interface
 
-Counter Alarm Sample
-#####################
+   Implement an alarm application using the counter API.
 
 Overview
 ********
-This sample provides an example of alarm application using counter API.
+This sample provides an example of alarm application using :ref:`counter API <counter_api>`.
 It sets an alarm with an initial delay of 2 seconds. At each alarm
 expiry, a new alarm is configured with a delay multiplied by 2.
+
+.. note::
+   In case of 1Hz frequency (RTC for example), precision is 1 second.
+   Therefore, the sample output may differ in 1 second
 
 Requirements
 ************
@@ -17,13 +22,13 @@ This sample requires the support of a timer IP compatible with alarm setting.
 References
 **********
 
-- :ref:`disco_l475_iot1_board`
+- :zephyr:board:`disco_l475_iot1`
 
 Building and Running
 ********************
 
  .. zephyr-app-commands::
-    :zephyr-app: samples/counter/alarm
+    :zephyr-app: samples/drivers/counter/alarm
     :host-os: unix
     :board: disco_l475_iot1
     :goals: run

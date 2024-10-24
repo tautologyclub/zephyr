@@ -1,15 +1,17 @@
-.. _sockets-echo-sample:
+.. zephyr:code-sample:: sockets-echo
+   :name: Echo server (simple)
+   :relevant-api: bsd_sockets
 
-Socket Echo Server
-##################
+   Implements a simple IPv4/IPv6 TCP echo server using BSD sockets.
 
 Overview
 ********
 
-The sockets/echo sample application for Zephyr implements an IPv4 TCP echo
-server using a BSD Sockets compatible API. The purpose of this sample is to
-show how it's possible to develop a sockets application portable to both
-POSIX and Zephyr. As such, it is kept minimal and supports only IPv4 and TCP.
+The sockets/echo sample application for Zephyr implements a TCP echo
+server supporting both IPv4 and IPv6 and using a BSD Sockets compatible API.
+The purpose of this sample is to show how it's possible to develop a sockets
+application portable to both POSIX and Zephyr. As such, it is kept minimal
+and supports only IPv4, IPv6 and TCP.
 
 The source code for this sample application can be found at:
 :zephyr_file:`samples/net/sockets/echo`.
@@ -31,12 +33,6 @@ Build the Zephyr version of the sockets/echo application like this:
    :goals: build
    :compact:
 
-``board_to_use`` defaults to ``qemu_x86``. In this case, you can run the
-application in QEMU using ``make run``. If you used another BOARD, you
-will need to consult its documentation for application deployment
-instructions. You can read about Zephyr support for specific boards in
-the documentation at :ref:`boards`.
-
 After the sample starts, it expects connections at 192.0.2.1, port 4242.
 The easiest way to connect is:
 
@@ -56,11 +52,11 @@ The same application source code can be built for a POSIX system, e.g.
 Linux. (Note: if you look at the source, you will see that the code is
 the same except the header files are different for Zephyr vs POSIX.)
 
-To build for a host POSIX OS:
+To build:
 
 .. code-block:: console
 
-    $ make -f Makefile.posix
+    $ make -f Makefile.host
 
 To run:
 
@@ -80,11 +76,10 @@ version.
 Running on cc3220sf_launchxl
 ============================
 
-See the note on Provisioning and Fast Connect in :ref:`cc3220sf_launchxl`.
+See the note on Provisioning and Fast Connect in :zephyr:board:`cc3220sf_launchxl`.
 
-After having connected to an Access Point using the sample WiFi shell,
+After having connected to an Access Point using the sample Wi-Fi shell,
 the IP address will be printed to the console upon running this echo
 application.
 
 Proceed to test as above.
-

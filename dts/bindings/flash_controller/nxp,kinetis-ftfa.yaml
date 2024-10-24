@@ -1,15 +1,24 @@
----
-title: NXP Kinetis Flash Memory Module (FTFA)
-version: 0.1
+description: NXP Kinetis Flash Memory Module A (FTFA)
 
-description: >
-    This binding gives for the NXP Kinetis Flash Memory Module A (FTFA)
+compatible: "nxp,kinetis-ftfa"
 
-inherits:
-    !include flash-controller.yaml
+include: flash-controller.yaml
 
 properties:
-    compatible:
-      constraint: "nxp,kinetis-ftfa"
+  fsec:
+    type: int
+    description: |
+      Configures the reset value of the FSEC register, which includes
+      backdoor key access, mass erase, factory access, and flash security
+      options.
 
-...
+  fopt:
+    type: int
+    description: |
+      Configures the reset value of the FOPT register, which includes boot,
+      NMI, and EzPort options.
+
+  config-field-offset:
+    type: int
+    description: |
+      Flash configuration field offset

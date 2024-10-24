@@ -1,3 +1,4 @@
 tests:
-  kernel.memory_slabs:
+  kernel.memory_slabs.concept:
     tags: kernel
+    timeout: 80

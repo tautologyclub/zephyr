@@ -1,7 +1,9 @@
-.. _lsm303dlhc:
+.. zephyr:code-sample:: lsmd303dlhc
+   :name: LSM303DLHC Magnetometer and Accelerometer sensor
+   :relevant-api: sensor_interface
 
-LSM303DLHC: Magnetometer and Accelerometer data Monitor
-#######################################################
+   Get magnetometer and accelerometer data from an LSM303DLHC sensor (polling
+   mode).
 
 Overview
 ********
@@ -20,7 +22,7 @@ References
 **********
 
 For more information about the LSM303DLHC eCompass module, see
-http://www.st.com/en/mems-and-sensors/lsm303dlhc.html
+https://www.st.com/en/mems-and-sensors/lsm303dlhc.html
 
 Building and Running
 ********************
@@ -29,7 +31,7 @@ This project outputs sensor data to the console. It requires a LSM303DLHC
 system-in-package, which is present on the stm32f3_disco board
 
 .. zephyr-app-commands::
-   :zephyr-app: samples/sensors/lsm303dlhc
+   :zephyr-app: samples/sensor/lsm303dlhc
    :board: stm32f3_disco
    :goals: build
    :compact:

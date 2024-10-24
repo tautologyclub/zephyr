@@ -4,26 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <errno.h>
+#include <string.h>
 #include "coverage.h"
 
-
-#ifdef CONFIG_X86
-#define MALLOC_MAX_HEAP_SIZE 32768
-#define MALLOC_MIN_BLOCK_SIZE 128
-#else
-#define MALLOC_MAX_HEAP_SIZE 16384
-#define MALLOC_MIN_BLOCK_SIZE 64
-#endif
-
-
-K_MEM_POOL_DEFINE(gcov_heap_mem_pool,
-		  MALLOC_MIN_BLOCK_SIZE,
-		  MALLOC_MAX_HEAP_SIZE, 1, 4);
-
+K_HEAP_DEFINE(gcov_heap, CONFIG_COVERAGE_GCOV_HEAP_SIZE);
 
 static struct gcov_info *gcov_info_head;
 
@@ -48,35 +36,68 @@ void __gcov_exit(void)
 }
 
 /**
- * buff_write_u64 - Store 64 bit data on a buffer and return the size
+ * print_u8 - Print 8 bit of gcov data
  */
-
-#define MASK_32BIT (0xffffffffUL)
-static inline void buff_write_u64(void *buffer, size_t *off, uint64_t v)
+static inline void print_u8(uint8_t v)
 {
-	*((u32_t *)((u8_t *)buffer + *off) + 0) = (u32_t)(v & MASK_32BIT);
-	*((u32_t *)((u8_t *)buffer + *off) + 1) = (u32_t)((v >> 32) &
-							  MASK_32BIT);
-	*off = *off + sizeof(u64_t);
+	printk("%02x", v);
 }
 
 /**
- * buff_write_u32 - Store 32 bit data on a buffer and return the size
+ * print_u32 - Print 32 bit of gcov data
  */
-static inline void buff_write_u32(void *buffer, size_t *off, u32_t v)
+static inline void print_u32(uint32_t v)
 {
-	*((u32_t *)((u8_t *)buffer + *off)) = v;
-	*off = *off + sizeof(u32_t);
+	uint8_t *ptr = (uint8_t *)&v;
+
+	print_u8(*ptr);
+	print_u8(*(ptr+1));
+	print_u8(*(ptr+2));
+	print_u8(*(ptr+3));
 }
 
+/**
+ * write_u64 - Store 64 bit data on a buffer and return the size
+ */
 
-size_t calculate_buff_size(struct gcov_info *info)
+static inline void write_u64(void *buffer, size_t *off, uint64_t v)
 {
-	u32_t iter;
-	u32_t iter_1;
-	u32_t iter_2;
-	/* few Fixed values at the start version, stamp and magic number. */
-	u32_t size = sizeof(u32_t) * 3;
+	if (buffer != NULL) {
+		memcpy((uint8_t *)buffer + *off, (uint8_t *)&v, sizeof(v));
+	} else {
+		print_u32(*((uint32_t *)&v));
+		print_u32(*(((uint32_t *)&v) + 1));
+	}
+	*off = *off + sizeof(uint64_t);
+}
+
+/**
+ * write_u32 - Store 32 bit data on a buffer and return the size
+ */
+static inline void write_u32(void *buffer, size_t *off, uint32_t v)
+{
+	if (buffer != NULL) {
+		memcpy((uint8_t *)buffer + *off, (uint8_t *)&v, sizeof(v));
+	} else {
+		print_u32(v);
+	}
+	*off = *off + sizeof(uint32_t);
+}
+
+size_t gcov_calculate_buff_size(struct gcov_info *info)
+{
+	uint32_t iter;
+	uint32_t iter_1;
+	uint32_t iter_2;
+
+	/* Few fixed values at the start: magic number,
+	 * version, stamp, and checksum.
+	 */
+#ifdef GCOV_12_FORMAT
+	uint32_t size = sizeof(uint32_t) * 4;
+#else
+	uint32_t size = sizeof(uint32_t) * 3;
+#endif
 
 	for (iter = 0U; iter < info->n_functions; iter++) {
 		/* space for TAG_FUNCTION and FUNCTION_LENGTH
@@ -84,7 +105,7 @@ size_t calculate_buff_size(struct gcov_info *info)
 		 * lineno_checksum
 		 * cfg_checksum
 		 */
-		size += (sizeof(u32_t) * 5);
+		size += (sizeof(uint32_t) * 5);
 
 		for (iter_1 = 0U; iter_1 < GCOV_COUNTERS; iter_1++) {
 			if (!info->merge[iter_1]) {
@@ -92,14 +113,14 @@ size_t calculate_buff_size(struct gcov_info *info)
 			}
 
 			/*  for function counter and number of values  */
-			size += (sizeof(u32_t) * 2);
+			size += (sizeof(uint32_t) * 2);
 
 			for (iter_2 = 0U;
 			     iter_2 < info->functions[iter]->ctrs->num;
 			     iter_2++) {
 
-				/* Iter for values which is u64_t */
-				size += (sizeof(u64_t));
+				/* Iter for values which is uint64_t */
+				size += (sizeof(uint64_t));
 			}
 
 		}
@@ -110,34 +131,39 @@ size_t calculate_buff_size(struct gcov_info *info)
 	return size;
 }
 
-
 /**
- * populate_buffer - convert from gcov data set (info) to
+ * gcov_populate_buffer - convert from gcov data set (info) to
  * .gcda file format.
  * This buffer will now have info similar to a regular gcda
  * format.
  */
-size_t populate_buffer(u8_t *buffer, struct gcov_info *info)
+size_t gcov_populate_buffer(uint8_t *buffer, struct gcov_info *info)
 {
 	struct gcov_fn_info *functions;
 	struct gcov_ctr_info *counters_per_func;
-	u32_t iter_functions;
-	u32_t iter_counts;
-	u32_t iter_counter_values;
+	uint32_t iter_functions;
+	uint32_t iter_counts;
+	uint32_t iter_counter_values;
 	size_t buffer_write_position = 0;
 
 	/* File header. */
-	buff_write_u32(buffer,
-		       &buffer_write_position,
-		       GCOV_DATA_MAGIC);
+	write_u32(buffer,
+		      &buffer_write_position,
+		      GCOV_DATA_MAGIC);
 
-	buff_write_u32(buffer,
-		       &buffer_write_position,
-		       info->version);
+	write_u32(buffer,
+		      &buffer_write_position,
+		      info->version);
 
-	buff_write_u32(buffer,
-		       &buffer_write_position,
-		       info->stamp);
+	write_u32(buffer,
+		      &buffer_write_position,
+		      info->stamp);
+
+#ifdef GCOV_12_FORMAT
+	write_u32(buffer,
+		      &buffer_write_position,
+		      info->checksum);
+#endif
 
 	for (iter_functions = 0U;
 	     iter_functions < info->n_functions;
@@ -146,25 +172,25 @@ size_t populate_buffer(u8_t *buffer, struct gcov_info *info)
 		functions = info->functions[iter_functions];
 
 
-		buff_write_u32(buffer,
-			       &buffer_write_position,
-			       GCOV_TAG_FUNCTION);
+		write_u32(buffer,
+			      &buffer_write_position,
+			      GCOV_TAG_FUNCTION);
 
-		buff_write_u32(buffer,
-			       &buffer_write_position,
-			       GCOV_TAG_FUNCTION_LENGTH);
+		write_u32(buffer,
+			      &buffer_write_position,
+			      GCOV_TAG_FUNCTION_LENGTH);
 
-		buff_write_u32(buffer,
-			       &buffer_write_position,
-			       functions->ident);
+		write_u32(buffer,
+			      &buffer_write_position,
+			      functions->ident);
 
-		buff_write_u32(buffer,
-			       &buffer_write_position,
-			       functions->lineno_checksum);
+		write_u32(buffer,
+			      &buffer_write_position,
+			      functions->lineno_checksum);
 
-		buff_write_u32(buffer,
-			       &buffer_write_position,
-			       functions->cfg_checksum);
+		write_u32(buffer,
+			      &buffer_write_position,
+			      functions->cfg_checksum);
 
 		counters_per_func = functions->ctrs;
 
@@ -176,22 +202,28 @@ size_t populate_buffer(u8_t *buffer, struct gcov_info *info)
 				continue;
 			}
 
-			buff_write_u32(buffer,
-				       &buffer_write_position,
-				       GCOV_TAG_FOR_COUNTER(iter_counts));
+			write_u32(buffer,
+				      &buffer_write_position,
+				      GCOV_TAG_FOR_COUNTER(iter_counts));
 
-			buff_write_u32(buffer,
-				       &buffer_write_position,
-				       counters_per_func->num * 2U);
+#ifdef GCOV_12_FORMAT
+			/* GCOV 12 counts the length by bytes */
+			write_u32(buffer,
+				      &buffer_write_position,
+				      counters_per_func->num * 2U * 4);
+#else
+			write_u32(buffer,
+				      &buffer_write_position,
+				      counters_per_func->num * 2U);
+#endif
 
 			for (iter_counter_values = 0U;
 			     iter_counter_values < counters_per_func->num;
 			     iter_counter_values++) {
 
-				buff_write_u64(buffer,
-					       &buffer_write_position,
-					       counters_per_func->\
-					       values[iter_counter_values]);
+				write_u64(buffer,
+					      &buffer_write_position,
+					      counters_per_func->values[iter_counter_values]);
 			}
 
 			counters_per_func++;
@@ -200,20 +232,68 @@ size_t populate_buffer(u8_t *buffer, struct gcov_info *info)
 	return buffer_write_position;
 }
 
-void dump_on_console(const char *filename, char *ptr, size_t len)
+void gcov_reset_counts(struct gcov_info *info)
 {
-	u32_t iter;
+	struct gcov_fn_info *functions;
+	struct gcov_ctr_info *counters_per_func;
+	uint32_t iter_functions;
+	uint32_t iter_counts;
+	uint32_t iter_counter_values;
 
+	for (iter_functions = 0U;
+		iter_functions < info->n_functions;
+		iter_functions++) {
+
+		functions = info->functions[iter_functions];
+		counters_per_func = functions->ctrs;
+
+		for (iter_counts = 0U;
+			iter_counts < GCOV_COUNTERS;
+			iter_counts++) {
+			for (iter_counter_values = 0U;
+				iter_counter_values < counters_per_func->num;
+				iter_counter_values++) {
+				counters_per_func->values[iter_counter_values] = 0;
+			}
+		}
+	}
+}
+
+void gcov_reset_all_counts(void)
+{
+	struct gcov_info *gcov_list = NULL;
+
+#ifdef CONFIG_MULTITHREADING
+	k_sched_lock();
+#endif
+
+	gcov_list = gcov_get_list_head();
+
+	while (gcov_list) {
+		gcov_reset_counts(gcov_list);
+		gcov_list = gcov_list->next;
+	}
+
+#ifdef CONFIG_MULTITHREADING
+	k_sched_unlock();
+#endif
+}
+
+void dump_on_console_start(const char *filename)
+{
 	printk("\n%c", FILE_START_INDICATOR);
 	while (*filename != '\0') {
 		printk("%c", *filename++);
 	}
 	printk("%c", GCOV_DUMP_SEPARATOR);
+}
 
-	/* Data dump */
-
-	for (iter = 0U; iter < len; iter++) {
-		printk(" %02x", (u8_t)*ptr++);
+void dump_on_console_data(char *ptr, size_t len)
+{
+	if (ptr != NULL) {
+		for (size_t iter = 0U; iter < len; iter++) {
+			print_u8((uint8_t)*ptr++);
+		}
 	}
 }
 
@@ -222,47 +302,65 @@ void dump_on_console(const char *filename, char *ptr, size_t len)
  */
 void gcov_coverage_dump(void)
 {
-	u8_t *buffer;
+	uint8_t *buffer;
 	size_t size;
 	size_t written_size;
+	struct gcov_info *gcov_list_first = gcov_info_head;
 	struct gcov_info *gcov_list = gcov_info_head;
 
-	k_sched_lock();
+	if (!k_is_in_isr()) {
+#ifdef CONFIG_MULTITHREADING
+		k_sched_lock();
+#endif
+	}
 	printk("\nGCOV_COVERAGE_DUMP_START");
 	while (gcov_list) {
 
-		size = calculate_buff_size(gcov_list);
+		dump_on_console_start(gcov_list->filename);
+		size = gcov_calculate_buff_size(gcov_list);
 
-		buffer = (u8_t *) k_mem_pool_malloc(&gcov_heap_mem_pool, size);
-		if (!buffer) {
+		buffer = k_heap_alloc(&gcov_heap, size, K_NO_WAIT);
+		if (CONFIG_COVERAGE_GCOV_HEAP_SIZE > 0 && !buffer) {
 			printk("No Mem available to continue dump\n");
 			goto coverage_dump_end;
 		}
 
-		written_size = populate_buffer(buffer, gcov_list);
+		written_size = gcov_populate_buffer(buffer, gcov_list);
 		if (written_size != size) {
 			printk("Write Error on buff\n");
 			goto coverage_dump_end;
 		}
 
-		dump_on_console(gcov_list->filename, buffer, size);
+		dump_on_console_data(buffer, size);
 
-		k_free(buffer);
+		k_heap_free(&gcov_heap, buffer);
 		gcov_list = gcov_list->next;
+		if (gcov_list_first == gcov_list) {
+			goto coverage_dump_end;
+		}
 	}
 coverage_dump_end:
 	printk("\nGCOV_COVERAGE_DUMP_END\n");
-	k_sched_unlock();
+	if (!k_is_in_isr()) {
+#ifdef CONFIG_MULTITHREADING
+		k_sched_unlock();
+#endif
+	}
 	return;
 }
 
+struct gcov_info *gcov_get_list_head(void)
+{
+	/* Locking someway before getting this is recommended. */
+	return gcov_info_head;
+}
 
 /* Initialize the gcov by calling the required constructors */
 void gcov_static_init(void)
 {
-	extern u32_t __init_array_start, __init_array_end;
-	u32_t func_pointer_start = (u32_t) &__init_array_start;
-	u32_t func_pointer_end = (u32_t) &__init_array_end;
+	extern uintptr_t __init_array_start, __init_array_end;
+	uintptr_t func_pointer_start = (uintptr_t) &__init_array_start;
+	uintptr_t func_pointer_end = (uintptr_t) &__init_array_end;
 
 	while (func_pointer_start < func_pointer_end) {
 		void (**p)(void);

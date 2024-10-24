@@ -7,7 +7,7 @@
 """Generate Interrupt Descriptor Table for x86 CPUs.
 
 This script generates the interrupt descriptor table (IDT) for x86.
-Please consule the IA Architecture SW Developer Manual, volume 3,
+Please consult the IA Architecture SW Developer Manual, volume 3,
 for more details on this data structure.
 
 This script accepts as input the zephyr_prebuilt.elf binary,
@@ -33,13 +33,12 @@ import sys
 import struct
 import os
 import elftools
-from distutils.version import LooseVersion
+from packaging import version
 from elftools.elf.elffile import ELFFile
 from elftools.elf.sections import SymbolTableSection
 
-if LooseVersion(elftools.__version__) < LooseVersion('0.24'):
-    sys.stderr.write("pyelftools is out of date, need version 0.24 or later\n")
-    sys.exit(1)
+if version.parse(elftools.__version__) < version.parse('0.24'):
+    sys.exit("pyelftools is out of date, need version 0.24 or later")
 
 # This will never change, first selector in the GDT after the null selector
 KERNEL_CODE_SEG = 0x08
@@ -55,8 +54,7 @@ def debug(text):
 
 
 def error(text):
-    sys.stderr.write(os.path.basename(sys.argv[0]) + ": " + text + "\n")
-    sys.exit(1)
+    sys.exit(os.path.basename(sys.argv[0]) + ": " + text)
 
 
 # See Section 6.11 of the Intel Architecture Software Developer's Manual
@@ -129,7 +127,7 @@ def update_irq_vec_map(irq_vec_map, irq, vector, max_irq):
     # This table will never have values less than 32 since those are for
     # exceptions; 0 means unconfigured
     if irq_vec_map[irq] != 0:
-        error("multiple vector assignments for interrupt line %d", irq)
+        error("multiple vector assignments for interrupt line %d" % irq)
 
     debug("assign IRQ %d to vector %d" % (irq, vector))
     irq_vec_map[irq] = vector
@@ -253,7 +251,7 @@ def parse_args():
     global args
     parser = argparse.ArgumentParser(
         description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter)
+        formatter_class=argparse.RawDescriptionHelpFormatter, allow_abbrev=False)
 
     parser.add_argument("-m", "--vector-map", required=True,
                         help="Output file mapping IRQ lines to IDT vectors")
@@ -276,10 +274,9 @@ def create_irq_vectors_allocated(vectors, spur_code, spur_nocode, filename):
     # interrupt handlers installed, they are free for runtime installation
     # of interrupts
     num_chars = (len(vectors) + 7) // 8
-    vbits = [0 for i in range(num_chars)]
-    for i in range(len(vectors)):
-        handler, _, _ = vectors[i]
-        if handler != spur_code and handler != spur_nocode:
+    vbits = num_chars*[0]
+    for i, (handler, _, _) in enumerate(vectors):
+        if handler not in (spur_code, spur_nocode):
             continue
 
         vbit_index = i // 8

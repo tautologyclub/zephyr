@@ -4,9 +4,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#undef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdio.h>
-#include <posix/unistd.h>
-#include <posix/dirent.h>
+#include <fcntl.h>
+#include <zephyr/posix/unistd.h>
+#include <zephyr/posix/dirent.h>
 #include "test_fs.h"
 
 extern int test_file_write(void);
@@ -26,7 +30,8 @@ static int test_mkdir(void)
 		return res;
 	}
 
-	res = open(TEST_DIR_FILE, O_RDWR);
+	res = open(TEST_DIR_FILE, O_CREAT | O_RDWR, 0770);
+
 	if (res < 0) {
 		TC_PRINT("Failed opening file [%d]\n", res);
 		return res;
@@ -49,9 +54,24 @@ static int test_mkdir(void)
 	return res;
 }
 
-static int test_lsdir(const char *path)
+static struct dirent *readdir_wrap(DIR *dirp, bool thread_safe)
+{
+	if (thread_safe) {
+		struct dirent *entry = NULL;
+		struct dirent *result = NULL;
+
+		zassert_ok(readdir_r(dirp, entry, &result));
+
+		return result;
+	} else {
+		return readdir(dirp);
+	}
+}
+
+static int test_lsdir(const char *path, bool thread_safe)
 {
 	DIR *dirp;
+	int res = 0;
 	struct dirent *entry;
 
 	TC_PRINT("\nreaddir test:\n");
@@ -65,21 +85,37 @@ static int test_lsdir(const char *path)
 
 	TC_PRINT("\nListing dir %s:\n", path);
 	/* Verify fs_readdir() */
-	entry = readdir(dirp);
+	errno = 0;
+	while ((entry = readdir_wrap(dirp, thread_safe)) != NULL) {
+		if (entry->d_name[0] == 0) {
+			res = -EIO;
+			break;
+		}
 
-	/* entry.name[0] == 0 means end-of-dir */
-	if (entry == NULL) {
-		closedir(dirp);
-		return -EIO;
-	} else {
 		TC_PRINT("[FILE] %s\n", entry->d_name);
+	}
+
+	if (errno) {
+		res = -EIO;
 	}
 
 	/* Verify fs_closedir() */
 	closedir(dirp);
 
-	return 0;
+	return res;
 }
+
+static void after_fn(void *unused)
+{
+	ARG_UNUSED(unused);
+
+	unlink(TEST_DIR_FILE);
+	unlink(TEST_DIR);
+}
+
+/* FIXME: restructure tests as per #46897 */
+ZTEST_SUITE(posix_fs_dir_test, NULL, test_mount, NULL, after_fn,
+	    test_unmount);
 
 /**
  * @brief Test for POSIX mkdir API
@@ -88,9 +124,10 @@ static int test_lsdir(const char *path)
  * mkdir API and open a new file under the directory and
  * writes some data into the file.
  */
-void test_fs_mkdir(void)
+ZTEST(posix_fs_dir_test, test_fs_mkdir)
 {
-	zassert_true(test_mkdir() == TC_PASS, NULL);
+	/* FIXME: restructure tests as per #46897 */
+	zassert_true(test_mkdir() == TC_PASS);
 }
 
 /**
@@ -100,7 +137,46 @@ void test_fs_mkdir(void)
  * opendir API, reads the contents of the directory through
  * readdir API and closes it through closedir API.
  */
-void test_fs_readdir(void)
+ZTEST(posix_fs_dir_test, test_fs_readdir)
 {
-	zassert_true(test_lsdir(TEST_DIR) == TC_PASS, NULL);
+	/* FIXME: restructure tests as per #46897 */
+	zassert_true(test_mkdir() == TC_PASS);
+	zassert_true(test_lsdir(TEST_DIR, false) == TC_PASS);
+}
+
+/**
+ * Same test as `test_fs_readdir`, but use thread-safe `readdir_r()` function
+ */
+ZTEST(posix_fs_dir_test, test_fs_readdir_threadsafe)
+{
+	/* FIXME: restructure tests as per #46897 */
+	zassert_true(test_mkdir() == TC_PASS);
+	zassert_true(test_lsdir(TEST_DIR, true) == TC_PASS);
+}
+
+/**
+ * @brief Test for POSIX rmdir API
+ *
+ * @details Test creates a new directory through POSIX
+ * mkdir API and remove directory using rmdir.
+ */
+ZTEST(posix_fs_dir_test, test_fs_rmdir)
+{
+#define IRWXG	0070
+	/* Create and remove empty directory */
+	zassert_ok(mkdir(TEST_DIR, IRWXG), "Error creating dir: %d", errno);
+	zassert_ok(rmdir(TEST_DIR), "Error removing dir: %d\n", errno);
+
+	/* Create directory and open a file in the directory
+	 * now removing the directory will fail, test will
+	 * fail in removal of non empty directory
+	 */
+	zassert_ok(mkdir(TEST_DIR, IRWXG), "Error creating dir: %d", errno);
+	zassert_not_equal(open(TEST_DIR_FILE, O_CREAT | O_RDWR), -1,
+			  "Error creating file: %d", errno);
+	zassert_not_ok(rmdir(TEST_DIR), "Error Non empty dir removed");
+	zassert_not_ok(rmdir(""), "Error Invalid path removed");
+	zassert_not_ok(rmdir(NULL), "Error Invalid path removed");
+	zassert_not_ok(rmdir("TEST_DIR."), "Error Invalid path removed");
+	zassert_not_ok(rmdir(TEST_FILE), "Error file removed");
 }

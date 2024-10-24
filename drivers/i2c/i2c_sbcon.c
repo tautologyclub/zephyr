@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#define DT_DRV_COMPAT arm_versatile_i2c
+
 /**
  * @file
  * @brief Driver for ARM's SBCon 2-wire serial bus interface
@@ -12,18 +14,23 @@
  * hardware state of two-bit serial interfaces like I2C.
  */
 
-#include <device.h>
+#include <zephyr/device.h>
 #include <errno.h>
-#include <i2c.h>
+#include <zephyr/drivers/i2c.h>
+
+#include <zephyr/logging/log.h>
+LOG_MODULE_REGISTER(i2c_sbcon, CONFIG_I2C_LOG_LEVEL);
+
+#include "i2c-priv.h"
 #include "i2c_bitbang.h"
 
 /* SBCon hardware registers layout */
 struct sbcon {
 	union {
-		volatile u32_t SB_CONTROLS; /* Write to set pins high */
-		volatile u32_t SB_CONTROL;  /* Read for state of pins */
+		volatile uint32_t SB_CONTROLS; /* Write to set pins high */
+		volatile uint32_t SB_CONTROL;  /* Read for state of pins */
 	};
-	volatile u32_t SB_CONTROLC;	/* Write to set pins low */
+	volatile uint32_t SB_CONTROLC;	/* Write to set pins low */
 };
 
 /* Bits values for SCL and SDA lines in struct sbcon registers */
@@ -33,6 +40,7 @@ struct sbcon {
 /* Driver config */
 struct i2c_sbcon_config {
 	struct sbcon *sbcon;		/* Address of hardware registers */
+	uint32_t bitrate;		/* I2C bus speed in Hz */
 };
 
 /* Driver instance data */
@@ -75,35 +83,61 @@ static const struct i2c_bitbang_io io_fns = {
 	.get_sda = &i2c_sbcon_get_sda,
 };
 
-static int i2c_sbcon_configure(struct device *dev, u32_t dev_config)
+static int i2c_sbcon_configure(const struct device *dev, uint32_t dev_config)
 {
-	struct i2c_sbcon_context *context = dev->driver_data;
+	struct i2c_sbcon_context *context = dev->data;
 
 	return i2c_bitbang_configure(&context->bitbang, dev_config);
 }
 
-static int i2c_sbcon_transfer(struct device *dev, struct i2c_msg *msgs,
-				u8_t num_msgs, u16_t slave_address)
+static int i2c_sbcon_get_config(const struct device *dev, uint32_t *config)
 {
-	struct i2c_sbcon_context *context = dev->driver_data;
+	struct i2c_sbcon_context *context = dev->data;
+
+	return i2c_bitbang_get_config(&context->bitbang, config);
+}
+
+static int i2c_sbcon_transfer(const struct device *dev, struct i2c_msg *msgs,
+				uint8_t num_msgs, uint16_t slave_address)
+{
+	struct i2c_sbcon_context *context = dev->data;
 
 	return i2c_bitbang_transfer(&context->bitbang, msgs, num_msgs,
 							slave_address);
 }
 
-static struct i2c_driver_api api = {
+static int i2c_sbcon_recover_bus(const struct device *dev)
+{
+	struct i2c_sbcon_context *context = dev->data;
+
+	return i2c_bitbang_recover_bus(&context->bitbang);
+}
+
+static const struct i2c_driver_api api = {
 	.configure = i2c_sbcon_configure,
+	.get_config = i2c_sbcon_get_config,
 	.transfer = i2c_sbcon_transfer,
+	.recover_bus = i2c_sbcon_recover_bus,
+#ifdef CONFIG_I2C_RTIO
+	.iodev_submit = i2c_iodev_submit_fallback,
+#endif
 };
 
-static int i2c_sbcon_init(struct device *dev)
+static int i2c_sbcon_init(const struct device *dev)
 {
-	struct i2c_sbcon_context *context = dev->driver_data;
-	const struct i2c_sbcon_config *config = dev->config->config_info;
+	struct i2c_sbcon_context *context = dev->data;
+	const struct i2c_sbcon_config *config = dev->config;
+	int ret;
 
 	i2c_bitbang_init(&context->bitbang, &io_fns, config->sbcon);
 
-	return 0;
+	ret = i2c_bitbang_configure(&context->bitbang,
+				    I2C_MODE_CONTROLLER | i2c_map_dt_bitrate(config->bitrate));
+	if (ret != 0) {
+		LOG_ERR("failed to configure I2C bitbang: %d", ret);
+	}
+
+	return ret;
 }
 
 #define	DEFINE_I2C_SBCON(_num)						\
@@ -111,27 +145,15 @@ static int i2c_sbcon_init(struct device *dev)
 static struct i2c_sbcon_context i2c_sbcon_dev_data_##_num;		\
 									\
 static const struct i2c_sbcon_config i2c_sbcon_dev_cfg_##_num = {	\
-	.sbcon		= (void *)DT_ARM_VERSATILE_I2C_##_num##_BASE_ADDRESS, \
+	.sbcon		= (void *)DT_INST_REG_ADDR(_num),		\
+	.bitrate	= DT_INST_PROP(_num, clock_frequency),		\
 };									\
 									\
-DEVICE_AND_API_INIT(i2c_sbcon_##_num, DT_ARM_VERSATILE_I2C_##_num##_LABEL, \
+I2C_DEVICE_DT_INST_DEFINE(_num,						\
 	    i2c_sbcon_init,						\
+	    NULL,							\
 	    &i2c_sbcon_dev_data_##_num,					\
 	    &i2c_sbcon_dev_cfg_##_num,					\
-	    PRE_KERNEL_2, CONFIG_I2C_INIT_PRIORITY, &api)
+	    PRE_KERNEL_2, CONFIG_I2C_INIT_PRIORITY, &api);
 
-#ifdef DT_ARM_VERSATILE_I2C_0
-DEFINE_I2C_SBCON(0);
-#endif
-
-#ifdef DT_ARM_VERSATILE_I2C_1
-DEFINE_I2C_SBCON(1);
-#endif
-
-#ifdef DT_ARM_VERSATILE_I2C_2
-DEFINE_I2C_SBCON(2);
-#endif
-
-#ifdef DT_ARM_VERSATILE_I2C_3
-DEFINE_I2C_SBCON(3);
-#endif
+DT_INST_FOREACH_STATUS_OKAY(DEFINE_I2C_SBCON)

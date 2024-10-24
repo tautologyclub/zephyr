@@ -1,25 +1,8 @@
-#
 # Copyright (c) 2018 Analog Devices Inc.
-#
 # SPDX-License-Identifier: Apache-2.0
-#
----
-title: ADXL372 Three Axis High-g I2C/SPI accelerometer
-version: 0.1
 
-description: >
-    This is a representation of the ADXL372 Three Axis High-g I2C/SPI accelerometer
+description: ADXL372 3-axis high-g accelerometer, accessed through I2C bus
 
-inherits:
-    !include i2c-device.yaml
+compatible: "adi,adxl372"
 
-properties:
-    compatible:
-      constraint: "adi,adxl372"
-
-    int1-gpios:
-      type: compound
-      category: optional
-      generation: define, use-prop-name
-
-...
+include: ["i2c-device.yaml", "adi,adxl372-common.yaml"]

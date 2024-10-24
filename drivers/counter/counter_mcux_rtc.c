@@ -1,13 +1,18 @@
 /*
  * Copyright (c) 2018 blik GmbH
- * Copyright (c) 2018, NXP
+ * Copyright (c) 2018,2024 NXP
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <counter.h>
+#define DT_DRV_COMPAT nxp_kinetis_rtc
+
+#include <zephyr/drivers/counter.h>
+#include <zephyr/irq.h>
+#include <zephyr/kernel.h>
+#include <zephyr/sys_clock.h>
 #include <fsl_rtc.h>
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(mcux_rtc, CONFIG_COUNTER_LOG_LEVEL);
 
@@ -21,12 +26,12 @@ struct mcux_rtc_data {
 struct mcux_rtc_config {
 	struct counter_config_info info;
 	RTC_Type *base;
-	void (*irq_config_func)(struct device *dev);
+	void (*irq_config_func)(const struct device *dev);
 };
 
-static int mcux_rtc_start(struct device *dev)
+static int mcux_rtc_start(const struct device *dev)
 {
-	const struct counter_config_info *info = dev->config->config_info;
+	const struct counter_config_info *info = dev->config;
 	const struct mcux_rtc_config *config =
 		CONTAINER_OF(info, struct mcux_rtc_config, info);
 
@@ -39,9 +44,9 @@ static int mcux_rtc_start(struct device *dev)
 	return 0;
 }
 
-static int mcux_rtc_stop(struct device *dev)
+static int mcux_rtc_stop(const struct device *dev)
 {
-	const struct counter_config_info *info = dev->config->config_info;
+	const struct counter_config_info *info = dev->config;
 	const struct mcux_rtc_config *config =
 		CONTAINER_OF(info, struct mcux_rtc_config, info);
 
@@ -57,13 +62,13 @@ static int mcux_rtc_stop(struct device *dev)
 	return 0;
 }
 
-static u32_t mcux_rtc_read(struct device *dev)
+static uint32_t mcux_rtc_read(const struct device *dev)
 {
-	const struct counter_config_info *info = dev->config->config_info;
+	const struct counter_config_info *info = dev->config;
 	const struct mcux_rtc_config *config =
 		CONTAINER_OF(info, struct mcux_rtc_config, info);
 
-	u32_t ticks = config->base->TSR;
+	uint32_t ticks = config->base->TSR;
 
 	/*
 	 * Read TSR seconds twice in case it glitches during an update.
@@ -79,16 +84,22 @@ static u32_t mcux_rtc_read(struct device *dev)
 	return ticks;
 }
 
-static int mcux_rtc_set_alarm(struct device *dev, u8_t chan_id,
+static int mcux_rtc_get_value(const struct device *dev, uint32_t *ticks)
+{
+	*ticks = mcux_rtc_read(dev);
+	return 0;
+}
+
+static int mcux_rtc_set_alarm(const struct device *dev, uint8_t chan_id,
 			      const struct counter_alarm_cfg *alarm_cfg)
 {
-	const struct counter_config_info *info = dev->config->config_info;
+	const struct counter_config_info *info = dev->config;
 	const struct mcux_rtc_config *config =
 		CONTAINER_OF(info, struct mcux_rtc_config, info);
-	struct mcux_rtc_data *data = dev->driver_data;
+	struct mcux_rtc_data *data = dev->data;
 
-	u32_t ticks = alarm_cfg->ticks;
-	u32_t current = mcux_rtc_read(dev);
+	uint32_t ticks = alarm_cfg->ticks;
+	uint32_t current = mcux_rtc_read(dev);
 
 	LOG_DBG("Current time is %d ticks", current);
 
@@ -101,7 +112,7 @@ static int mcux_rtc_set_alarm(struct device *dev, u8_t chan_id,
 		return -EBUSY;
 	}
 
-	if (!alarm_cfg->absolute) {
+	if ((alarm_cfg->flags & COUNTER_ALARM_CFG_ABSOLUTE) == 0) {
 		ticks += current;
 	}
 
@@ -119,9 +130,9 @@ static int mcux_rtc_set_alarm(struct device *dev, u8_t chan_id,
 	return 0;
 }
 
-static int mcux_rtc_cancel_alarm(struct device *dev, u8_t chan_id)
+static int mcux_rtc_cancel_alarm(const struct device *dev, uint8_t chan_id)
 {
-	struct mcux_rtc_data *data = dev->driver_data;
+	struct mcux_rtc_data *data = dev->data;
 
 	if (chan_id != 0U) {
 		LOG_ERR("Invalid channel id");
@@ -133,61 +144,64 @@ static int mcux_rtc_cancel_alarm(struct device *dev, u8_t chan_id)
 	return 0;
 }
 
-static int mcux_rtc_set_top_value(struct device *dev, u32_t ticks,
-				  counter_top_callback_t callback,
-				  void *user_data)
+static int mcux_rtc_set_top_value(const struct device *dev,
+				  const struct counter_top_cfg *cfg)
 {
-	const struct counter_config_info *info = dev->config->config_info;
-	struct mcux_rtc_data *data = dev->driver_data;
+	const struct counter_config_info *info = dev->config;
+	const struct mcux_rtc_config *config =
+			CONTAINER_OF(info, struct mcux_rtc_config, info);
+	struct mcux_rtc_data *data = dev->data;
 
-	if (ticks != info->max_top_value) {
-		LOG_ERR("Wrap can only be set to 0x%x", info->max_top_value);
+	if (cfg->ticks != info->max_top_value) {
+		LOG_ERR("Wrap can only be set to 0x%x.", info->max_top_value);
 		return -ENOTSUP;
 	}
 
-	data->top_callback = callback;
-	data->top_user_data = user_data;
+	if (!(cfg->flags & COUNTER_TOP_CFG_DONT_RESET)) {
+		RTC_StopTimer(config->base);
+		config->base->TSR = 0;
+		RTC_StartTimer(config->base);
+	}
+
+	data->top_callback = cfg->callback;
+	data->top_user_data = cfg->user_data;
 
 	return 0;
 }
 
-static u32_t mcux_rtc_get_pending_int(struct device *dev)
+static uint32_t mcux_rtc_get_pending_int(const struct device *dev)
 {
-	const struct counter_config_info *info = dev->config->config_info;
+	const struct counter_config_info *info = dev->config;
 	const struct mcux_rtc_config *config =
 		CONTAINER_OF(info, struct mcux_rtc_config, info);
 
 	return RTC_GetStatusFlags(config->base) & RTC_SR_TAF_MASK;
 }
 
-static u32_t mcux_rtc_get_top_value(struct device *dev)
+static uint32_t mcux_rtc_get_top_value(const struct device *dev)
 {
-	const struct counter_config_info *info = dev->config->config_info;
+	const struct counter_config_info *info = dev->config;
 
 	return info->max_top_value;
 }
 
-static u32_t mcux_rtc_get_max_relative_alarm(struct device *dev)
+static void mcux_rtc_isr(const struct device *dev)
 {
-	const struct counter_config_info *info = dev->config->config_info;
-
-	return info->max_top_value;
-}
-
-static void mcux_rtc_isr(void *arg)
-{
-	struct device *dev = arg;
-	const struct counter_config_info *info = dev->config->config_info;
+	const struct counter_config_info *info = dev->config;
 	const struct mcux_rtc_config *config =
 		CONTAINER_OF(info, struct mcux_rtc_config, info);
-	struct mcux_rtc_data *data = dev->driver_data;
-	u32_t current = mcux_rtc_read(dev);
+	struct mcux_rtc_data *data = dev->data;
+	counter_alarm_callback_t cb;
+	uint32_t current = mcux_rtc_read(dev);
+
 
 	LOG_DBG("Current time is %d ticks", current);
 
 	if ((RTC_GetStatusFlags(config->base) & RTC_SR_TAF_MASK) &&
 	    (data->alarm_callback)) {
-		data->alarm_callback(dev, 0, current, data->alarm_user_data);
+		cb = data->alarm_callback;
+		data->alarm_callback = NULL;
+		cb(dev, 0, current, data->alarm_user_data);
 	}
 
 	if ((RTC_GetStatusFlags(config->base) & RTC_SR_TOF_MASK) &&
@@ -212,9 +226,9 @@ static void mcux_rtc_isr(void *arg)
 	RTC_StartTimer(config->base);
 }
 
-static int mcux_rtc_init(struct device *dev)
+static int mcux_rtc_init(const struct device *dev)
 {
-	const struct counter_config_info *info = dev->config->config_info;
+	const struct counter_config_info *info = dev->config;
 	const struct mcux_rtc_config *config =
 		CONTAINER_OF(info, struct mcux_rtc_config, info);
 	rtc_config_t rtc_config;
@@ -222,9 +236,26 @@ static int mcux_rtc_init(struct device *dev)
 	RTC_GetDefaultConfig(&rtc_config);
 	RTC_Init(config->base, &rtc_config);
 
+	/* DT_ENUM_IDX(DT_NODELABEL(rtc), clock_source):
+	 * "RTC": 0
+	 * "LPO": 1
+	 */
+	BUILD_ASSERT((((DT_INST_ENUM_IDX(0, clock_source) == 1) &&
+		FSL_FEATURE_RTC_HAS_LPO_ADJUST) ||
+		DT_INST_ENUM_IDX(0, clock_source) == 0),
+		"Cannot choose the LPO clock for that instance of the RTC");
+#if (defined(FSL_FEATURE_RTC_HAS_LPO_ADJUST) && FSL_FEATURE_RTC_HAS_LPO_ADJUST)
+	/* The RTC prescaler increments using the LPO 1 kHz clock
+	 * instead of the RTC clock
+	 */
+	RTC_EnableLPOClock(config->base, DT_INST_ENUM_IDX(0, clock_source));
+#endif
+
+#if !(defined(FSL_FEATURE_RTC_HAS_NO_CR_OSCE) && FSL_FEATURE_RTC_HAS_NO_CR_OSCE)
 	/* Enable 32kHz oscillator and wait for 1ms to settle */
-	config->base->CR |= 0x100;
+	RTC_SetClockSource(config->base);
 	k_busy_wait(USEC_PER_MSEC);
+#endif /* !FSL_FEATURE_RTC_HAS_NO_CR_OSCE */
 
 	config->irq_config_func(dev);
 
@@ -234,39 +265,39 @@ static int mcux_rtc_init(struct device *dev)
 static const struct counter_driver_api mcux_rtc_driver_api = {
 	.start = mcux_rtc_start,
 	.stop = mcux_rtc_stop,
-	.read = mcux_rtc_read,
+	.get_value = mcux_rtc_get_value,
 	.set_alarm = mcux_rtc_set_alarm,
 	.cancel_alarm = mcux_rtc_cancel_alarm,
 	.set_top_value = mcux_rtc_set_top_value,
 	.get_pending_int = mcux_rtc_get_pending_int,
 	.get_top_value = mcux_rtc_get_top_value,
-	.get_max_relative_alarm = mcux_rtc_get_max_relative_alarm,
 };
 
 static struct mcux_rtc_data mcux_rtc_data_0;
 
-static void mcux_rtc_irq_config_0(struct device *dev);
+static void mcux_rtc_irq_config_0(const struct device *dev);
 
 static struct mcux_rtc_config mcux_rtc_config_0 = {
-	.base = (RTC_Type *)DT_RTC_MCUX_0_BASE_ADDRESS,
+	.base = (RTC_Type *)DT_INST_REG_ADDR(0),
 	.irq_config_func = mcux_rtc_irq_config_0,
 	.info = {
 		.max_top_value = UINT32_MAX,
-		.freq = DT_NXP_KINETIS_RTC_0_CLOCK_FREQUENCY /
-				DT_NXP_KINETIS_RTC_0_PRESCALER,
-		.count_up = true,
+		.freq = DT_INST_PROP(0, clock_frequency) /
+				DT_INST_PROP(0, prescaler),
+		.flags = COUNTER_CONFIG_INFO_COUNT_UP,
 		.channels = 1,
 	},
 };
 
-DEVICE_AND_API_INIT(rtc, DT_RTC_MCUX_0_NAME, &mcux_rtc_init,
+DEVICE_DT_INST_DEFINE(0, &mcux_rtc_init, NULL,
 		    &mcux_rtc_data_0, &mcux_rtc_config_0.info,
-		    POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,
+		    POST_KERNEL, CONFIG_COUNTER_INIT_PRIORITY,
 		    &mcux_rtc_driver_api);
 
-static void mcux_rtc_irq_config_0(struct device *dev)
+static void mcux_rtc_irq_config_0(const struct device *dev)
 {
-	IRQ_CONNECT(DT_RTC_MCUX_0_IRQ, DT_RTC_MCUX_0_IRQ_PRI,
-		    mcux_rtc_isr, DEVICE_GET(rtc), 0);
-	irq_enable(DT_RTC_MCUX_0_IRQ);
+	IRQ_CONNECT(DT_INST_IRQN(0),
+		    DT_INST_IRQ(0, priority),
+		    mcux_rtc_isr, DEVICE_DT_INST_GET(0), 0);
+	irq_enable(DT_INST_IRQN(0));
 }

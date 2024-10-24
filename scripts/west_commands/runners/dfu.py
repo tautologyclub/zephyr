@@ -8,8 +8,6 @@ from collections import namedtuple
 import sys
 import time
 
-from west import log
-
 from runners.core import ZephyrBinaryRunner, RunnerCaps, \
     BuildConfiguration
 
@@ -20,12 +18,14 @@ DfuSeConfig = namedtuple('DfuSeConfig', ['address', 'options'])
 class DfuUtilBinaryRunner(ZephyrBinaryRunner):
     '''Runner front-end for dfu-util.'''
 
-    def __init__(self, cfg, pid, alt, img, exe='dfu-util',
+    def __init__(self, cfg, dev_id, alt, img, exe='dfu-util',
                  dfuse_config=None):
-        super(DfuUtilBinaryRunner, self).__init__(cfg)
+
+        super().__init__(cfg)
+        self.dev_id = dev_id # Used only for error checking in do_run
         self.alt = alt
         self.img = img
-        self.cmd = [exe, '-d,{}'.format(pid)]
+        self.cmd = [exe, '-d,{}'.format(dev_id)]
         try:
             self.list_pattern = ', alt={},'.format(int(self.alt))
         except ValueError:
@@ -36,6 +36,7 @@ class DfuUtilBinaryRunner(ZephyrBinaryRunner):
         else:
             self.dfuse = True
         self.dfuse_config = dfuse_config
+        self.reset = False
 
     @classmethod
     def name(cls):
@@ -43,32 +44,42 @@ class DfuUtilBinaryRunner(ZephyrBinaryRunner):
 
     @classmethod
     def capabilities(cls):
-        return RunnerCaps(commands={'flash'}, flash_addr=True)
+        return RunnerCaps(commands={'flash'}, dev_id=True, flash_addr=True)
+
+    @classmethod
+    def dev_id_help(cls) -> str:
+        return 'USB VID:PID of the connected device.'
 
     @classmethod
     def do_add_parser(cls, parser):
-        # Required:
-        parser.add_argument("--pid", required=True,
-                            help="USB VID:PID of the board")
         parser.add_argument("--alt", required=True,
                             help="interface alternate setting number or name")
 
         # Optional:
+        parser.add_argument("--pid", dest='dev_id',
+                            help=cls.dev_id_help())
         parser.add_argument("--img",
                             help="binary to flash, default is --bin-file")
         parser.add_argument("--dfuse", default=False, action='store_true',
-                            help='''set if target is a DfuSe device;
-                            implies --dt-flash.''')
+                            help='''use the DfuSe protocol extensions
+                                 supported by STMicroelectronics
+                                 devices (if given, the image flash
+                                 address respects
+                                 CONFIG_FLASH_BASE_ADDRESS and
+                                 CONFIG_FLASH_LOAD_OFFSET)''')
         parser.add_argument("--dfuse-modifiers", default='leave',
-                            help='''colon-separated list of DfuSe modifiers
-                            (default is "leave", which starts execution
-                            immediately); --dfuse must also be given for this
-                            option to take effect.''')
+                            help='''colon-separated list of additional
+                                 DfuSe modifiers for dfu-util's -s
+                                 option (default is
+                                 "-s <flash-address>:leave", which starts
+                                 execution immediately); requires
+                                 --dfuse
+                                 ''')
         parser.add_argument('--dfu-util', default='dfu-util',
                             help='dfu-util executable; defaults to "dfu-util"')
 
     @classmethod
-    def create(cls, cfg, args):
+    def do_create(cls, cfg, args):
         if args.img is None:
             args.img = cfg.bin_file
 
@@ -80,8 +91,17 @@ class DfuUtilBinaryRunner(ZephyrBinaryRunner):
         else:
             dcfg = None
 
-        return DfuUtilBinaryRunner(cfg, args.pid, args.alt, args.img,
-                                   exe=args.dfu_util, dfuse_config=dcfg)
+        ret = DfuUtilBinaryRunner(cfg, args.dev_id, args.alt, args.img,
+                                  exe=args.dfu_util, dfuse_config=dcfg)
+        ret.ensure_device()
+        return ret
+
+    def ensure_device(self):
+        if not self.find_device():
+            self.reset = True
+            print('Please reset your board to switch to DFU mode...')
+            while not self.find_device():
+                time.sleep(0.1)
 
     def find_device(self):
         cmd = list(self.cmd) + ['-l']
@@ -90,17 +110,14 @@ class DfuUtilBinaryRunner(ZephyrBinaryRunner):
         return self.list_pattern in output
 
     def do_run(self, command, **kwargs):
-        reset = False
+        if not self.dev_id:
+            raise RuntimeError('Please specify a USB VID:PID with the '
+                               '-i/--dev-id or --pid command-line switch.')
+        self.require(self.cmd[0])
+        self.ensure_output('bin')
+
         if not self.find_device():
-            reset = True
-            log.dbg('Device not found, waiting for it',
-                    level=log.VERBOSE_EXTREME)
-            # Use of print() here is advised. We don't want to lose
-            # this information in a separate log -- this is
-            # interactive and requires a terminal.
-            print('Please reset your board to switch to DFU mode...')
-            while not self.find_device():
-                time.sleep(0.1)
+            raise RuntimeError('device not found')
 
         cmd = list(self.cmd)
         if self.dfuse:
@@ -117,6 +134,6 @@ class DfuUtilBinaryRunner(ZephyrBinaryRunner):
             #
             # DfuSe targets do as well, except when 'leave' is given
             # as an option.
-            reset = False
-        if reset:
+            self.reset = False
+        if self.reset:
             print('Now reset your board again to switch back to runtime mode.')

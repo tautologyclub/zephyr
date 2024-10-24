@@ -1,27 +1,15 @@
----
-title: Kinetis LPSCI UART
-version: 0.1
+description: Kinetis LPSCI UART
 
-description: >
-    This binding gives a base representation of the LPSCI UART
+compatible: "nxp,kinetis-lpsci"
 
-inherits:
-    !include uart.yaml
+include: [uart-controller.yaml, pinctrl-device.yaml]
 
 properties:
-    compatible:
-      constraint: "nxp,kinetis-lpsci"
+  reg:
+    required: true
 
-    reg:
-      type: array
-      description: mmio register space
-      generation: define
-      category: required
+  interrupts:
+    required: true
 
-    interrupts:
-      type: array
-      category: required
-      description: required interrupts
-      generation: define
-
-...
+  pinctrl-0:
+    required: true

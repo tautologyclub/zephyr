@@ -1,26 +1,5 @@
----
-title: STM32 UART
-version: 0.1
+description: STM32 UART
 
-description: >
-    This binding gives a base representation of the STM32 UART
+compatible: "st,stm32-uart"
 
-inherits:
-    !include uart.yaml
-
-properties:
-    compatible:
-      constraint: "st,stm32-uart"
-
-    reg:
-      type: array
-      description: mmio register space
-      generation: define
-      category: required
-
-    interrupts:
-      type: array
-      category: required
-      description: required interrupts
-      generation: define
-...
+include: st,stm32-uart-base.yaml

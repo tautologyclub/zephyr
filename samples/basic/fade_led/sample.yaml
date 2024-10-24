@@ -1,11 +1,19 @@
 sample:
   name: Fade LED
 tests:
-  sample.fade_led:
-    # FIXME: We should remove those and just rely on depends_on
-    platform_whitelist: arduino_101 quark_d2000_crb
-        nucleo_f103rb nucleo_f401re nucleo_l476rg nucleo_l496zg hexiwear_k64
-        nrf51_pca10028 nrf52840_pca10056
-    tags: drivers pwm
+  sample.basic.fade_led:
+    tags:
+      - drivers
+      - pwm
     depends_on: pwm
-    harness: led
+    filter: dt_alias_exists("pwm-led0") and dt_compat_enabled("pwm-leds")
+    integration_platforms:
+      - nrf51dk/nrf51822
+    harness: console
+    harness_config:
+      type: multi_line
+      ordered: true
+      regex:
+        - "PWM-based LED fade"
+        - "Using pulse width [0-9]+%"
+        - "Using pulse width [0-9]+%"

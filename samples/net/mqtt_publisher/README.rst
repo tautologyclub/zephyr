@@ -1,7 +1,8 @@
-.. _mqtt-publisher-sample:
+.. zephyr:code-sample:: mqtt-publisher
+   :name: MQTT publisher
+   :relevant-api: mqtt_socket
 
-MQTT Publisher
-##############
+   Send MQTT PUBLISH messages to an MQTT server.
 
 Overview
 ********
@@ -51,23 +52,11 @@ Application sleep time:
 
 	#define APP_SLEEP_MSECS		500
 
-Application RX and TX timeout:
-
-.. code-block:: c
-
-	#define APP_TX_RX_TIMEOUT       300
-
 Max number of connection tries:
 
 .. code-block:: c
 
 	#define APP_CONNECT_TRIES	10
-
-Max number of MQTT PUBLISH iterations:
-
-.. code-block:: c
-
-	#define APP_MAX_ITERATIONS	5
 
 MQTT Client Identifier:
 
@@ -93,6 +82,12 @@ following macros to specify those values:
 	#define BLUEMIX_EVENT		"status"
 	#define BLUEMIX_FORMAT		"json"
 
+Max number of MQTT PUBLISH iterations is defined in Kconfig:
+
+.. code-block:: cfg
+
+	CONFIG_NET_SAMPLE_APP_MAX_ITERATIONS=5
+
 On your Linux host computer, open a terminal window, locate the source code
 of this sample application (i.e., :zephyr_file:`samples/net/mqtt_publisher`) and type:
 
@@ -102,11 +97,38 @@ of this sample application (i.e., :zephyr_file:`samples/net/mqtt_publisher`) and
    :goals: build flash
    :compact:
 
+If the board is connected directly to the Linux host computer through LAN,
+configure the network interface:
+
+.. code-block:: console
+
+	$ IFACE=eth0 # Change this to the interface to which the LAN cable is connected
+
+	$ IPV4_ADDR_1="192.0.2.2/24"
+	$ IPV4_ROUTE_1="192.0.2.0/24"
+
+	$ sudo ip address add $IPV4_ADDR_1 dev $IFACE
+	$ sudo ip route add $IPV4_ROUTE_1 dev $IFACE
+	$ sudo ip link set dev $IFACE up
+
+You can run ``sudo ip addr flush dev $IFACE`` to undo the steps above.
+
+.. note::
+	For mosquitto 2.0 and up, ensure you set unauthenticated access by
+	adding the following to the mosquitto configuration file ``mosquitto.conf``:
+
+	.. code-block:: none
+
+		listener 1883
+		allow_anonymous true
+		bind_interface eth0
+
 Open another terminal window and type:
 
 .. code-block:: console
 
-	$ sudo mosquitto -v -p 1883
+	$ sudo mosquitto -v -p 1883		# For mosquitto < 2.0
+	$ sudo mosquitto -v -c mosquitto.conf	# For mosquitto >= 2.0
 
 Open another terminal window and type:
 
@@ -129,15 +151,15 @@ try this sample with TLS enabled, by following these steps:
   https://test.mosquitto.org
 - In :file:`src/test_certs.h`, set ``ca_certificate[]`` using the certificate
   contents (or set it to its filename if the socket offloading feature is
-  enabled on your platform and :option:`CONFIG_TLS_CREDENTIAL_FILENAMES` is
+  enabled on your platform and :kconfig:option:`CONFIG_TLS_CREDENTIAL_FILENAMES` is
   set to ``y``).
 - In :file:`src/config.h`, set SERVER_ADDR to the IP address to connect to,
   i.e., the IP address of test.mosquitto.org ``"37.187.106.16"``
 - In :file:`src/main.c`, set TLS_SNI_HOSTNAME to ``"test.mosquitto.org"``
   to match the Common Name (CN) in the downloaded certificate.
-- Build the sample by specifying ``-DOVERLAY_CONFIG=overlay-tls.conf``
-  when running cmake (or refer to the TLS offloading section below if
-  your platform uses the offloading feature).
+- Build the sample by specifying ``-DEXTRA_CONF_FILE=overlay-tls.conf``
+  when running ``west build`` or ``cmake`` (or refer to the TLS offloading
+  section below if your platform uses the offloading feature).
 - Flash the binary onto the device to run the sample:
 
 .. code-block:: console
@@ -148,7 +170,8 @@ TLS offloading
 ==============
 
 For boards that support this feature, TLS offloading is used by
-specifying ``-DOVERLAY_CONFIG=overlay-tls-offload.conf`` when running cmake.
+specifying ``-DEXTRA_CONF_FILE=overlay-tls-offload.conf`` when running ``west
+build`` or ``cmake``.
 
 Using this overlay enables TLS without bringing in mbedtls.
 
@@ -156,7 +179,8 @@ SOCKS5 proxy support
 ====================
 
 It is also possible to connect to the MQTT broker through a SOCKS5 proxy.
-To enable it, use ``-DOVERLAY_CONFIG=overlay-socks5.conf`` when running cmake.
+To enable it, use ``-DEXTRA_CONF_FILE=overlay-socks5.conf`` when running ``west
+build`` or  ``cmake``.
 
 By default, to make the testing easier, the proxy is expected to run on the
 same host as the MQTT broker.
@@ -164,7 +188,7 @@ same host as the MQTT broker.
 To start a proxy server, ``ssh`` can be used.
 Use the following command to run it on your host with the default port:
 
-.. code-block: console
+.. code-block:: console
 
 	$ ssh -N -D 0.0.0.0:1080 localhost
 
@@ -193,7 +217,7 @@ In addition, TLS_SNI_HOSTNAME in main.c should be defined to match the
 Common Name (CN) in the certificate file in order for the TLS domain
 name verification to succeed.
 
-See the note on Provisioning and Fast Connect in :ref:`cc3220sf_launchxl`.
+See the note on Provisioning and Fast Connect in :zephyr:board:`cc3220sf_launchxl`.
 
 The Secure Socket Offload section has information on programming the
 certificate to flash.
@@ -205,9 +229,9 @@ Sample output
 
 This is the output from the FRDM UART console, with:
 
-.. code-block:: c
+.. code-block:: cfg
 
-	#define APP_MAX_ITERATIONS     5
+	CONFIG_NET_SAMPLE_APP_MAX_ITERATIONS=5
 
 .. code-block:: console
 
@@ -348,3 +372,9 @@ This is the output from the MQTT broker:
 	1485663807: Received PUBREL from zephyr_publisher (Mid: 49829)
 	1485663807: Sending PUBCOMP to zephyr_publisher (Mid: 49829)
 	1485663808: Received DISCONNECT from zephyr_publisher
+
+Wi-Fi
+=====
+
+The IPv4 Wi-Fi support can be enabled in the sample with
+:ref:`Wi-Fi snippet <snippet-wifi-ipv4>`.

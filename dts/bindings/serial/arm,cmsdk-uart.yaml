@@ -1,26 +1,12 @@
----
-title: ARM CMSDK UART
-version: 0.1
+description: ARM CMSDK UART
 
-description: >
-    This binding gives a base representation of the ARM CMSDK UART
+compatible: "arm,cmsdk-uart"
 
-inherits:
-    !include uart.yaml
+include: uart-controller.yaml
 
 properties:
-    compatible:
-      constraint: "arm,cmsdk-uart"
+  reg:
+    required: true
 
-    reg:
-      type: array
-      description: mmio register space
-      generation: define
-      category: required
-
-    interrupts:
-      type: array
-      category: required
-      description: required interrupts
-      generation: define
-...
+  interrupts:
+    required: true

@@ -1,38 +1,12 @@
----
-title: OpenISA LPUART
-version: 0.1
+description: OpenISA LPUART
 
-description: >
-    This binding gives a base representation of the OpenISA LPUART
+compatible: "openisa,rv32m1-lpuart"
 
-inherits:
-    !include uart.yaml
+include: [uart-controller.yaml, pinctrl-device.yaml]
 
 properties:
-    compatible:
-      constraint: "openisa,rv32m1-lpuart"
+  reg:
+    required: true
 
-    reg:
-      type: array
-      description: mmio register space
-      generation: define
-      category: required
-
-    interrupts:
-      type: array
-      category: required
-      description: required interrupts
-      generation: define
-
-    pinctrl-*:
-      type: array
-      category: optional
-      description: pinmux information for RX, TX, CTS, RTS
-      generation: structures
-
-    hw-flow-control:
-      type: boolean
-      category: optional
-      description: use hw flow control
-      generation: define
-...
+  interrupts:
+    required: true

@@ -1,7 +1,18 @@
 common:
   depends_on: netif
-  platform_whitelist: native_posix qemu_x86 qemu_cortex_m3
+  filter: CONFIG_FULL_LIBC_SUPPORTED
+  tags:
+    - net
+    - socket
+    - getaddrinfo
+    - userspace
+  platform_exclude:
+    - native_posix
+    - native_posix/native/64
 tests:
-  net.socket:
+  net.socket.get_addr_info:
     min_ram: 21
-    tags: net socket
+  net.socket.get_addr_info.timeout:
+    extra_configs:
+      - CONFIG_NET_SOCKETS_DNS_TIMEOUT=2000
+      - CONFIG_NET_SOCKETS_DNS_BACKOFF_INTERVAL=1000

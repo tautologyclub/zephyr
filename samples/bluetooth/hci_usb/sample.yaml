@@ -3,6 +3,19 @@ sample:
 tests:
   sample.bluetooth.hci_usb:
     harness: bluetooth
-    depends_on: usb_device
-    platform_whitelist: quark_se_c1000_devboard nrf52840_pca10056
-    tags: usb bluetooth
+    depends_on:
+      - usb_device
+      - ble
+    tags:
+      - usb
+      - bluetooth
+  sample.bluetooth.hci_usb.device_next:
+    harness: bluetooth
+    depends_on:
+      - usb_device
+      - ble
+    tags:
+      - usb
+      - bluetooth
+    extra_args: CONF_FILE="usbd_next_prj.conf"
+    platform_allow: nrf52840dk/nrf52840

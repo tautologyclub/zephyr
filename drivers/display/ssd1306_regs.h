@@ -8,9 +8,13 @@
 #ifndef __SSD1306_REGS_H__
 #define __SSD1306_REGS_H__
 
-#define SSD1306_CONTROL_LAST_BYTE_CMD		0x00
-#define SSD1306_CONTROL_LAST_BYTE_DATA		0x40
+/* All following bytes will contain commands */
+#define SSD1306_CONTROL_ALL_BYTES_CMD		0x00
+/* All following bytes will contain data */
+#define SSD1306_CONTROL_ALL_BYTES_DATA		0x40
+/* The next byte will contain a command */
 #define SSD1306_CONTROL_BYTE_CMD		0x80
+/* The next byte will contain data */
 #define SSD1306_CONTROL_BYTE_DATA		0xc0
 #define SSD1306_READ_STATUS_MASK		0xc0
 #define SSD1306_READ_STATUS_BUSY		0x80
@@ -24,7 +28,9 @@
 #define SSD1306_SET_ENTIRE_DISPLAY_OFF		0xa4
 #define SSD1306_SET_ENTIRE_DISPLAY_ON		0xa5
 
+/* RAM data of 1 indicates an "ON" pixel */
 #define SSD1306_SET_NORMAL_DISPLAY		0xa6
+/* RAM data of 0 indicates an "ON" pixel */
 #define SSD1306_SET_REVERSE_DISPLAY		0xa7
 
 #define SSD1306_DISPLAY_OFF			0xae
@@ -70,11 +76,15 @@
 
 #define SSD1306_SET_PADS_HW_CONFIG		0xda /* double byte command */
 #define SSD1306_SET_PADS_HW_SEQUENTIAL		0x02
-#define SSD1306_SET_PADS_HW_ALTERNATIVE		0x12
+#define SSD1306_SET_PADS_HW_ALTERNATIVE         0x12
+
+#define SSD1306_SET_IREF_MODE			0xad
+#define SSD1306_SET_IREF_MODE_INTERNAL		0x30
+#define SSD1306_SET_IREF_MODE_EXTERNAL		0x00
 
 
 /*
- * Timming and Driving Scheme Setting Command Table
+ * Timing and Driving Scheme Setting Command Table
  */
 #define SSD1306_SET_CLOCK_DIV_RATIO		0xd5 /* double byte command */
 

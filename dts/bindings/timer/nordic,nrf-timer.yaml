@@ -1,37 +1,44 @@
-#
 # Copyright (c) 2018 Nordic Semiconductor ASA
-#
 # SPDX-License-Identifier: Apache-2.0
-#
----
-title: Nordic nRF timer
-version: 0.1
 
-description: >
-    This is a representation of the Nordic nRF timer node
+description: Nordic nRF timer node
+
+compatible: "nordic,nrf-timer"
+
+include: base.yaml
 
 properties:
-    compatible:
-      type: string
-      category: required
-      description: compatible strings
-      constraint: "nordic,nrf-timer"
+  reg:
+    required: true
 
-    reg:
-      type: array
-      category: required
-      description: mmio register space
-      generation: define
+  cc-num:
+    type: int
+    required: true
+    description: Number of capture/compare (CC) registers available
 
-    interrupts:
-      type: array
-      category: required
-      description: required interrupts
-      generation: define
+  max-bit-width:
+    type: int
+    required: true
+    description: Maximum bit width supported
 
-    label:
-      type: string
-      category: required
-      description: Human readable string describing the device (used by Zephyr for API name)
-      generation: define
-...
+  interrupts:
+    required: true
+
+  max-frequency:
+    type: int
+    default: 16000000
+    description: |
+        Maximum timer frequency in Hz.
+
+        The default value is 16MHz which was the maximum frequency for all nRF TIMER peripherals
+        up to the nRF54 series, and still remains the most typical maximum frequency for nRF54
+        TIMERs.
+
+  prescaler:
+    type: int
+    required: true
+    description: Prescaler value determines frequency (max-frequency/2^prescaler)
+
+  zli:
+    type: boolean
+    description: Enable event handler in the ZLI (Zero latency interrupt) context

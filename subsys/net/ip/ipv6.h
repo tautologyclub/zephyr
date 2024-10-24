@@ -15,10 +15,10 @@
 
 #include <zephyr/types.h>
 
-#include <net/net_ip.h>
-#include <net/net_pkt.h>
-#include <net/net_if.h>
-#include <net/net_context.h>
+#include <zephyr/net/net_ip.h>
+#include <zephyr/net/net_pkt.h>
+#include <zephyr/net/net_if.h>
+#include <zephyr/net/net_context.h>
 
 #include "icmpv6.h"
 #include "nbr.h"
@@ -29,6 +29,10 @@
 #define NET_IPV6_DEFAULT_PREFIX_LEN 64
 
 #define NET_MAX_RS_COUNT 3
+
+#define NET_IPV6_DSCP_MASK 0xFC
+#define NET_IPV6_DSCP_OFFSET 2
+#define NET_IPV6_ECN_MASK 0x03
 
 /**
  * @brief Bitmaps for IPv6 extension header processing
@@ -87,22 +91,22 @@ struct net_ipv6_nbr_data {
 	struct in6_addr addr;
 
 	/** Reachable timer. */
-	s64_t reachable;
+	int64_t reachable;
 
 	/** Reachable timeout */
-	s32_t reachable_timeout;
+	int32_t reachable_timeout;
 
 	/** Neighbor Solicitation reply timer */
-	s64_t send_ns;
+	int64_t send_ns;
 
 	/** State of the neighbor discovery */
 	enum net_ipv6_nbr_state state;
 
 	/** Link metric for the neighbor */
-	u16_t link_metric;
+	uint16_t link_metric;
 
 	/** How many times we have sent NS */
-	u8_t ns_count;
+	uint8_t ns_count;
 
 	/** Is the neighbor a router */
 	bool is_router;
@@ -111,7 +115,7 @@ struct net_ipv6_nbr_data {
 	/** Stale counter used to removed oldest nbr in STALE state,
 	 *  when table is full.
 	 */
-	u32_t stale_counter;
+	uint32_t stale_counter;
 #endif
 };
 
@@ -133,13 +137,15 @@ int net_ipv6_start_rs(struct net_if *iface);
 
 int net_ipv6_send_na(struct net_if *iface, const struct in6_addr *src,
 		     const struct in6_addr *dst, const struct in6_addr *tgt,
-		     u8_t flags);
+		     uint8_t flags);
 
 
-static inline bool net_ipv6_is_nexthdr_upper_layer(u8_t nexthdr)
+static inline bool net_ipv6_is_nexthdr_upper_layer(uint8_t nexthdr)
 {
 	return (nexthdr == IPPROTO_ICMPV6 || nexthdr == IPPROTO_UDP ||
-		nexthdr == IPPROTO_TCP);
+		nexthdr == IPPROTO_TCP ||
+		(IS_ENABLED(CONFIG_NET_L2_VIRTUAL) &&
+		 ((nexthdr == IPPROTO_IPV6) || (nexthdr == IPPROTO_IPIP))));
 }
 
 /**
@@ -151,9 +157,22 @@ static inline bool net_ipv6_is_nexthdr_upper_layer(u8_t nexthdr)
  *
  * @return 0 on success, negative errno otherwise.
  */
+#if defined(CONFIG_NET_NATIVE_IPV6)
 int net_ipv6_create(struct net_pkt *pkt,
 		    const struct in6_addr *src,
 		    const struct in6_addr *dst);
+#else
+static inline int net_ipv6_create(struct net_pkt *pkt,
+				  const struct in6_addr *src,
+				  const struct in6_addr *dst)
+{
+	ARG_UNUSED(pkt);
+	ARG_UNUSED(src);
+	ARG_UNUSED(dst);
+
+	return -ENOTSUP;
+}
+#endif
 
 /**
  * @brief Finalize IPv6 packet. It should be called right before
@@ -166,35 +185,40 @@ int net_ipv6_create(struct net_pkt *pkt,
  *
  * @return 0 on success, negative errno otherwise.
  */
-int net_ipv6_finalize(struct net_pkt *pkt, u8_t next_header_proto);
-
-
-/**
- * @brief Join a given multicast group.
- *
- * @param iface Network interface where join message is sent
- * @param addr Multicast group to join
- *
- * @return Return 0 if joining was done, <0 otherwise.
- */
-#if defined(CONFIG_NET_IPV6_MLD)
-int net_ipv6_mld_join(struct net_if *iface, const struct in6_addr *addr);
+#if defined(CONFIG_NET_NATIVE_IPV6)
+int net_ipv6_finalize(struct net_pkt *pkt, uint8_t next_header_proto);
 #else
-#define net_ipv6_mld_join(...)
-#endif /* CONFIG_NET_IPV6_MLD */
+static inline int net_ipv6_finalize(struct net_pkt *pkt,
+				    uint8_t next_header_proto)
+{
+	ARG_UNUSED(pkt);
+	ARG_UNUSED(next_header_proto);
+
+	return -ENOTSUP;
+}
+#endif
 
 /**
- * @brief Leave a given multicast group.
+ * @brief Send MLDv2 report message with a single entry.
  *
- * @param iface Network interface where leave message is sent
- * @param addr Multicast group to leave
+ * @param iface Network interface where message is sent
+ * @param addr Multicast group
+ * @param mode MLDv2 mode (NET_IPV6_MLDv2_MODE_IS_INCLUDE NET_IPV6_MLDv2_MODE_IS_EXCLUDE)
  *
  * @return Return 0 if leaving is done, <0 otherwise.
  */
 #if defined(CONFIG_NET_IPV6_MLD)
-int net_ipv6_mld_leave(struct net_if *iface, const struct in6_addr *addr);
+int net_ipv6_mld_send_single(struct net_if *iface, const struct in6_addr *addr, uint8_t mode);
 #else
-#define net_ipv6_mld_leave(...)
+static inline int
+net_ipv6_mld_send_single(struct net_if *iface, const struct in6_addr *addr, uint8_t mode)
+{
+	ARG_UNUSED(iface);
+	ARG_UNUSED(addr);
+	ARG_UNUSED(mode);
+
+	return -ENOTSUP;
+}
 #endif /* CONFIG_NET_IPV6_MLD */
 
 /**
@@ -218,7 +242,7 @@ typedef void (*net_nbr_cb_t)(struct net_nbr *nbr, void *user_data);
  *
  * @return Return a verdict.
  */
-#if defined(CONFIG_NET_IPV6_NBR_CACHE)
+#if defined(CONFIG_NET_IPV6_NBR_CACHE) && defined(CONFIG_NET_NATIVE_IPV6)
 enum net_verdict net_ipv6_prepare_for_send(struct net_pkt *pkt);
 #else
 static inline enum net_verdict net_ipv6_prepare_for_send(struct net_pkt *pkt)
@@ -228,6 +252,21 @@ static inline enum net_verdict net_ipv6_prepare_for_send(struct net_pkt *pkt)
 #endif
 
 /**
+ * @brief Lock IPv6 Neighbor table mutex
+ *
+ * Neighbor table mutex is used by IPv6 Neighbor cache and IPv6 Routing module.
+ * Mutex shall be held whenever accessing or manipulating neighbor or routing
+ * table entries (for example when obtaining a pointer to the neighbor table
+ * entry). Neighbor and Routing API functions will lock the mutex when called.
+ */
+void net_ipv6_nbr_lock(void);
+
+/**
+ * @brief Unlock IPv6 Neighbor table mutex
+ */
+void net_ipv6_nbr_unlock(void);
+
+/**
  * @brief Look for a neighbor from it's address on an iface
  *
  * @param iface A valid pointer on a network interface
@@ -235,7 +274,7 @@ static inline enum net_verdict net_ipv6_prepare_for_send(struct net_pkt *pkt)
  *
  * @return A valid pointer on a neighbor on success, NULL otherwise
  */
-#if defined(CONFIG_NET_IPV6_NBR_CACHE)
+#if defined(CONFIG_NET_IPV6_NBR_CACHE) && defined(CONFIG_NET_NATIVE_IPV6)
 struct net_nbr *net_ipv6_nbr_lookup(struct net_if *iface,
 				    struct in6_addr *addr);
 #else
@@ -255,7 +294,7 @@ static inline struct net_nbr *net_ipv6_nbr_lookup(struct net_if *iface,
  *
  * @return A valid pointer on a neighbor on success, NULL otherwise
  */
-struct net_nbr *net_ipv6_get_nbr(struct net_if *iface, u8_t idx);
+struct net_nbr *net_ipv6_get_nbr(struct net_if *iface, uint8_t idx);
 
 /**
  * @brief Look for a neighbor from it's link local address index
@@ -266,13 +305,13 @@ struct net_nbr *net_ipv6_get_nbr(struct net_if *iface, u8_t idx);
  *
  * @return A valid pointer on a neighbor on success, NULL otherwise
  */
-#if defined(CONFIG_NET_IPV6_NBR_CACHE)
+#if defined(CONFIG_NET_IPV6_NBR_CACHE) && defined(CONFIG_NET_NATIVE_IPV6)
 struct in6_addr *net_ipv6_nbr_lookup_by_index(struct net_if *iface,
-					      u8_t idx);
+					      uint8_t idx);
 #else
 static inline
 struct in6_addr *net_ipv6_nbr_lookup_by_index(struct net_if *iface,
-					      u8_t idx)
+					      uint8_t idx)
 {
 	return NULL;
 }
@@ -293,16 +332,16 @@ struct in6_addr *net_ipv6_nbr_lookup_by_index(struct net_if *iface,
  *
  * @return A valid pointer on a neighbor on success, NULL otherwise
  */
-#if defined(CONFIG_NET_IPV6_NBR_CACHE)
+#if defined(CONFIG_NET_IPV6_NBR_CACHE) && defined(CONFIG_NET_NATIVE_IPV6)
 struct net_nbr *net_ipv6_nbr_add(struct net_if *iface,
-				 struct in6_addr *addr,
-				 struct net_linkaddr *lladdr,
+				 const struct in6_addr *addr,
+				 const struct net_linkaddr *lladdr,
 				 bool is_router,
 				 enum net_ipv6_nbr_state state);
 #else
 static inline struct net_nbr *net_ipv6_nbr_add(struct net_if *iface,
-					       struct in6_addr *addr,
-					       struct net_linkaddr *lladdr,
+					       const struct in6_addr *addr,
+					       const struct net_linkaddr *lladdr,
 					       bool is_router,
 					       enum net_ipv6_nbr_state state)
 {
@@ -318,7 +357,7 @@ static inline struct net_nbr *net_ipv6_nbr_add(struct net_if *iface,
  *
  * @return True if neighbor could be removed, False otherwise
  */
-#if defined(CONFIG_NET_IPV6_NBR_CACHE)
+#if defined(CONFIG_NET_IPV6_NBR_CACHE) && defined(CONFIG_NET_NATIVE_IPV6)
 bool net_ipv6_nbr_rm(struct net_if *iface, struct in6_addr *addr);
 #else
 static inline bool net_ipv6_nbr_rm(struct net_if *iface, struct in6_addr *addr)
@@ -333,7 +372,7 @@ static inline bool net_ipv6_nbr_rm(struct net_if *iface, struct in6_addr *addr)
  * @param cb User supplied callback function to call.
  * @param user_data User specified data.
  */
-#if defined(CONFIG_NET_IPV6_NBR_CACHE)
+#if defined(CONFIG_NET_IPV6_NBR_CACHE) && defined(CONFIG_NET_NATIVE_IPV6)
 void net_ipv6_nbr_foreach(net_nbr_cb_t cb, void *user_data);
 #else /* CONFIG_NET_IPV6_NBR_CACHE */
 static inline void net_ipv6_nbr_foreach(net_nbr_cb_t cb, void *user_data)
@@ -343,12 +382,35 @@ static inline void net_ipv6_nbr_foreach(net_nbr_cb_t cb, void *user_data)
 #endif /* CONFIG_NET_IPV6_NBR_CACHE */
 
 /**
+ * @brief Provide a reachability hint for IPv6 Neighbor Discovery.
+ *
+ * This function is intended for upper-layer protocols to inform the IPv6
+ * Neighbor Discovery process about the active link to a specific neighbor.
+ * By signaling recent "forward progress" event, such as the reception of
+ * an ACK, this function can help reducing unnecessary ND traffic as per the
+ * guidelines in RFC 4861 (section 7.3).
+ *
+ * @param iface A pointer to the network interface.
+ * @param ipv6_addr Pointer to the IPv6 address of the neighbor node.
+ */
+#if defined(CONFIG_NET_IPV6_ND) && defined(CONFIG_NET_NATIVE_IPV6)
+void net_ipv6_nbr_reachability_hint(struct net_if *iface, const struct in6_addr *ipv6_addr);
+#else
+static inline void net_ipv6_nbr_reachability_hint(struct net_if *iface,
+						  const struct in6_addr *ipv6_addr)
+{
+	ARG_UNUSED(iface);
+	ARG_UNUSED(ipv6_addr);
+}
+#endif
+
+/**
  * @brief Set the neighbor reachable timer.
  *
  * @param iface A valid pointer on a network interface
  * @param nbr Neighbor struct pointer
  */
-#if defined(CONFIG_NET_IPV6_ND)
+#if defined(CONFIG_NET_IPV6_ND) && defined(CONFIG_NET_NATIVE_IPV6)
 void net_ipv6_nbr_set_reachable_timer(struct net_if *iface,
 				      struct net_nbr *nbr);
 
@@ -359,14 +421,7 @@ static inline void net_ipv6_nbr_set_reachable_timer(struct net_if *iface,
 }
 #endif
 
-/* We do not have to accept larger than 1500 byte IPv6 packet (RFC 2460 ch 5).
- * This means that we should receive everything within first two fragments.
- * The first one being 1280 bytes and the second one 220 bytes.
- */
-#if !defined(NET_IPV6_FRAGMENTS_MAX_PKT)
-#define NET_IPV6_FRAGMENTS_MAX_PKT 2
-#endif
-
+#if defined(CONFIG_NET_IPV6_FRAGMENT)
 /** Store pending IPv6 fragment information that is needed for reassembly. */
 struct net_ipv6_reassembly {
 	/** IPv6 source address of the fragment */
@@ -379,14 +434,17 @@ struct net_ipv6_reassembly {
 	 * Timeout for cancelling the reassembly. The timer is used
 	 * also to detect if this reassembly slot is used or not.
 	 */
-	struct k_delayed_work timer;
+	struct k_work_delayable timer;
 
 	/** Pointers to pending fragments */
-	struct net_pkt *pkt[NET_IPV6_FRAGMENTS_MAX_PKT];
+	struct net_pkt *pkt[CONFIG_NET_IPV6_FRAGMENT_MAX_PKT];
 
 	/** IPv6 fragment identification */
-	u32_t id;
+	uint32_t id;
 };
+#else
+struct net_ipv6_reassembly;
+#endif
 
 /**
  * @typedef net_ipv6_frag_cb_t
@@ -417,8 +475,8 @@ void net_ipv6_frag_foreach(net_ipv6_frag_cb_t cb, void *user_data);
  *
  * @return 0 on success, a negative errno otherwise.
  */
-int net_ipv6_find_last_ext_hdr(struct net_pkt *pkt, u16_t *next_hdr_off,
-			       u16_t *last_hdr_off);
+int net_ipv6_find_last_ext_hdr(struct net_pkt *pkt, uint16_t *next_hdr_off,
+			       uint16_t *last_hdr_off);
 
 /**
  * @brief Handles IPv6 fragmented packets.
@@ -429,15 +487,15 @@ int net_ipv6_find_last_ext_hdr(struct net_pkt *pkt, u16_t *next_hdr_off,
  *
  * @return Return verdict about the packet
  */
-#if defined(CONFIG_NET_IPV6_FRAGMENT)
+#if defined(CONFIG_NET_IPV6_FRAGMENT) && defined(CONFIG_NET_NATIVE_IPV6)
 enum net_verdict net_ipv6_handle_fragment_hdr(struct net_pkt *pkt,
 					      struct net_ipv6_hdr *hdr,
-					      u8_t nexthdr);
+					      uint8_t nexthdr);
 #else
 static inline
 enum net_verdict net_ipv6_handle_fragment_hdr(struct net_pkt *pkt,
 					      struct net_ipv6_hdr *hdr,
-					      u8_t nexthdr)
+					      uint8_t nexthdr)
 {
 	ARG_UNUSED(pkt);
 	ARG_UNUSED(hdr);
@@ -447,7 +505,7 @@ enum net_verdict net_ipv6_handle_fragment_hdr(struct net_pkt *pkt,
 }
 #endif /* CONFIG_NET_IPV6_FRAGMENT */
 
-#if defined(CONFIG_NET_IPV6)
+#if defined(CONFIG_NET_NATIVE_IPV6)
 void net_ipv6_init(void);
 void net_ipv6_nbr_init(void);
 #if defined(CONFIG_NET_IPV6_MLD)
@@ -458,6 +516,154 @@ void net_ipv6_mld_init(void);
 #else
 #define net_ipv6_init(...)
 #define net_ipv6_nbr_init(...)
+#endif
+
+/**
+ * @brief Decode DSCP value from TC field.
+ *
+ * @param tc TC field value from the IPv6 header.
+ *
+ * @return Decoded DSCP value.
+ */
+static inline uint8_t net_ipv6_get_dscp(uint8_t tc)
+{
+	return (tc & NET_IPV6_DSCP_MASK) >> NET_IPV6_DSCP_OFFSET;
+}
+
+/**
+ * @brief Encode DSCP value into TC field.
+ *
+ * @param tc A pointer to the TC field.
+ * @param dscp DSCP value to set.
+ */
+static inline void net_ipv6_set_dscp(uint8_t *tc, uint8_t dscp)
+{
+	*tc &= ~NET_IPV6_DSCP_MASK;
+	*tc |= (dscp << NET_IPV6_DSCP_OFFSET) & NET_IPV6_DSCP_MASK;
+}
+
+/**
+ * @brief Convert DSCP value to priority.
+ *
+ * @param dscp DSCP value.
+ */
+static inline uint8_t net_ipv6_dscp_to_priority(uint8_t dscp)
+{
+	return dscp >> 3;
+}
+
+/**
+ * @brief Decode ECN value from TC field.
+ *
+ * @param tc TC field value from the IPv6 header.
+ *
+ * @return Decoded ECN value.
+ */
+static inline uint8_t net_ipv6_get_ecn(uint8_t tc)
+{
+	return tc & NET_IPV6_ECN_MASK;
+}
+
+/**
+ * @brief Encode ECN value into TC field.
+ *
+ * @param tc A pointer to the TC field.
+ * @param ecn ECN value to set.
+ */
+static inline void net_ipv6_set_ecn(uint8_t *tc, uint8_t ecn)
+{
+	*tc &= ~NET_IPV6_ECN_MASK;
+	*tc |= ecn & NET_IPV6_ECN_MASK;
+}
+
+/**
+ * @brief Start IPv6 privacy extension procedure.
+ *
+ * @param iface Interface to use.
+ * @param prefix IPv6 prefix to use.
+ * @param vlifetime Lifetime of this IPv6 prefix (in seconds).
+ * @param preferred_lifetime Preferred lifetime of this IPv6 prefix (in seconds)
+ */
+#if defined(CONFIG_NET_IPV6_PE)
+void net_ipv6_pe_start(struct net_if *iface, const struct in6_addr *prefix,
+		       uint32_t vlifetime, uint32_t preferred_lifetime);
+
+#else
+static inline void net_ipv6_pe_start(struct net_if *iface,
+				     const struct in6_addr *prefix,
+				     uint32_t vlifetime,
+				     uint32_t preferred_lifetime)
+{
+	ARG_UNUSED(iface);
+	ARG_UNUSED(prefix);
+	ARG_UNUSED(vlifetime);
+	ARG_UNUSED(preferred_lifetime);
+}
+#endif /* CONFIG_NET_IPV6_PE */
+
+/**
+ * @brief Check if maximum number of Duplicate Address Detection (DAD) requests
+ *        have been done.
+ *
+ * @param count Number of DAD requests done.
+ *
+ * @return Return True if DAD can continue, False if max amount of DAD
+ *         requests have been done.
+ */
+#if defined(CONFIG_NET_IPV6_PE)
+bool net_ipv6_pe_check_dad(int count);
+#else
+static inline bool net_ipv6_pe_check_dad(int count)
+{
+	ARG_UNUSED(count);
+
+	return false;
+}
+#endif /* CONFIG_NET_IPV6_PE */
+
+/**
+ * @brief Initialize IPv6 privacy extension support for a network interface.
+ *
+ * @param iface Network interface
+ *
+ * @return Return 0 if ok or <0 if there is an error.
+ */
+#if defined(CONFIG_NET_IPV6_PE)
+int net_ipv6_pe_init(struct net_if *iface);
+#else
+static inline int net_ipv6_pe_init(struct net_if *iface)
+{
+	iface->pe_enabled = false;
+	iface->pe_prefer_public = false;
+
+	return 0;
+}
+#endif /* CONFIG_NET_IPV6_PE */
+
+typedef void (*net_ipv6_pe_filter_cb_t)(struct in6_addr *prefix,
+					bool is_blacklist,
+					void *user_data);
+
+/**
+ * @brief Go through all the IPv6 privacy extension filters and call callback
+ * for each IPv6 prefix.
+ *
+ * @param cb User supplied callback function to call.
+ * @param user_data User specified data.
+ *
+ * @return Total number of filters found.
+ */
+#if defined(CONFIG_NET_IPV6_PE)
+int net_ipv6_pe_filter_foreach(net_ipv6_pe_filter_cb_t cb, void *user_data);
+#else
+static inline int net_ipv6_pe_filter_foreach(net_ipv6_pe_filter_cb_t cb,
+					     void *user_data)
+{
+	ARG_UNUSED(cb);
+	ARG_UNUSED(user_data);
+
+	return 0;
+}
 #endif
 
 #endif /* __IPV6_H */

@@ -1,10 +1,6 @@
-.. _usb-samples:
+.. zephyr:code-sample-category:: usb
+   :name: USB device support
+   :show-listing:
+   :glob: **/*
 
-USB Samples
-###############
-
-.. toctree::
-   :maxdepth: 1
-   :glob:
-
-   **/*
+   Samples that demonstrate :ref:`usb_device_stack`.

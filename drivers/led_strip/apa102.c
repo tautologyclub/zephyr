@@ -4,24 +4,28 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <errno.h>
-#include <led_strip.h>
-#include <spi.h>
+#define DT_DRV_COMPAT apa_apa102
 
-struct apa102_data {
-	struct device *spi;
-	struct spi_config cfg;
+#include <errno.h>
+#include <zephyr/drivers/led_strip.h>
+#include <zephyr/drivers/spi.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/sys/util.h>
+
+struct apa102_config {
+	struct spi_dt_spec bus;
+	size_t length;
 };
 
-static int apa102_update(struct device *dev, void *buf, size_t size)
+static int apa102_update(const struct device *dev, void *buf, size_t size)
 {
-	struct apa102_data *data = dev->driver_data;
-	static const u8_t zeros[] = {0, 0, 0, 0};
-	static const u8_t ones[] = {0xFF, 0xFF, 0xFF, 0xFF};
+	const struct apa102_config *config = dev->config;
+	static const uint8_t zeros[] = { 0, 0, 0, 0 };
+	static const uint8_t ones[] = { 0xFF, 0xFF, 0xFF, 0xFF };
 	const struct spi_buf tx_bufs[] = {
 		{
 			/* Start frame: at least 32 zeros */
-			.buf = (u8_t *)zeros,
+			.buf = (uint8_t *)zeros,
 			.len = sizeof(zeros),
 		},
 		{
@@ -34,7 +38,7 @@ static int apa102_update(struct device *dev, void *buf, size_t size)
 			 * remaining bits to the LEDs at the end of
 			 * the strip.
 			 */
-			.buf = (u8_t *)ones,
+			.buf = (uint8_t *)ones,
 			.len = sizeof(ones),
 		},
 	};
@@ -43,22 +47,22 @@ static int apa102_update(struct device *dev, void *buf, size_t size)
 		.count = ARRAY_SIZE(tx_bufs)
 	};
 
-	return spi_write(data->spi, &data->cfg, &tx);
+	return spi_write_dt(&config->bus, &tx);
 }
 
-static int apa102_update_rgb(struct device *dev, struct led_rgb *pixels,
+static int apa102_update_rgb(const struct device *dev, struct led_rgb *pixels,
 			     size_t count)
 {
-	u8_t *p = (u8_t *)pixels;
+	uint8_t *p = (uint8_t *)pixels;
 	size_t i;
 	/* SOF (3 bits) followed by the 0 to 31 global dimming level */
-	u8_t prefix = 0xE0 | 31;
+	uint8_t prefix = 0xE0 | 31;
 
 	/* Rewrite to the on-wire format */
 	for (i = 0; i < count; i++) {
-		u8_t r = pixels[i].r;
-		u8_t g = pixels[i].g;
-		u8_t b = pixels[i].b;
+		uint8_t r = pixels[i].r;
+		uint8_t g = pixels[i].g;
+		uint8_t b = pixels[i].b;
 
 		*p++ = prefix;
 		*p++ = b;
@@ -70,37 +74,45 @@ static int apa102_update_rgb(struct device *dev, struct led_rgb *pixels,
 	return apa102_update(dev, pixels, sizeof(struct led_rgb) * count);
 }
 
-static int apa102_update_channels(struct device *dev, u8_t *channels,
-				  size_t num_channels)
+static size_t apa102_length(const struct device *dev)
 {
-	/* Not implemented */
-	return -EINVAL;
+	const struct apa102_config *config = dev->config;
+
+	return config->length;
 }
 
-static int apa102_init(struct device *dev)
+static int apa102_init(const struct device *dev)
 {
-	struct apa102_data *data = dev->driver_data;
+	const struct apa102_config *config = dev->config;
 
-	data->spi = device_get_binding(DT_APA_APA102_0_BUS_NAME);
-	if (!data->spi) {
+	if (!spi_is_ready_dt(&config->bus)) {
 		return -ENODEV;
 	}
-
-	data->cfg.slave = DT_APA_APA102_0_BASE_ADDRESS;
-	data->cfg.frequency = DT_APA_APA102_0_SPI_MAX_FREQUENCY;
-	data->cfg.operation =
-		SPI_OP_MODE_MASTER | SPI_TRANSFER_MSB | SPI_WORD_SET(8);
 
 	return 0;
 }
 
-static struct apa102_data apa102_data_0;
-
 static const struct led_strip_driver_api apa102_api = {
 	.update_rgb = apa102_update_rgb,
-	.update_channels = apa102_update_channels,
+	.length = apa102_length,
 };
 
-DEVICE_AND_API_INIT(apa102_0, DT_APA_APA102_0_LABEL, apa102_init,
-		    &apa102_data_0, NULL, POST_KERNEL,
-		    CONFIG_LED_STRIP_INIT_PRIORITY, &apa102_api);
+#define APA102_DEVICE(idx)						 \
+	static const struct apa102_config apa102_##idx##_config = {	 \
+		.bus = SPI_DT_SPEC_INST_GET(				 \
+			idx,						 \
+			SPI_OP_MODE_MASTER | SPI_TRANSFER_MSB | SPI_WORD_SET(8), \
+			0),						 \
+		.length = DT_INST_PROP(idx, chain_length),		 \
+	};								 \
+									 \
+	DEVICE_DT_INST_DEFINE(idx,					 \
+			      apa102_init,				 \
+			      NULL,					 \
+			      NULL,					 \
+			      &apa102_##idx##_config,			 \
+			      POST_KERNEL,				 \
+			      CONFIG_LED_STRIP_INIT_PRIORITY,		 \
+			      &apa102_api);
+
+DT_INST_FOREACH_STATUS_OKAY(APA102_DEVICE)

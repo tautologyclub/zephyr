@@ -1,32 +1,23 @@
----
-title: ns16550
-version: 0.1
+description: ns16550 UART
 
-description: >
-    This binding gives a base representation of the ns16550 UART
+compatible: "ns16550"
 
-inherits:
-    !include uart.yaml
+include: [uart-controller.yaml, pcie-device.yaml, pinctrl-device.yaml, reset-device.yaml]
 
 properties:
-    compatible:
-      constraint: "ns16550"
+  reg-shift:
+    type: int
+    required: true
+    description: quantity to shift the register offsets by
 
-    reg:
-      type: array
-      description: mmio register space
-      generation: define
-      category: required
+  pcp:
+    type: int
+    description: custom clock (PRV_CLOCK_PARAMS, if supported)
 
-    reg-shift:
-      type: int
-      category: optional
-      description: quantity to shift the register offsets by
-      generation: define
+  dlf:
+    type: int
+    description: divisor latch fraction (DLF, if supported)
 
-    interrupts:
-      type: array
-      category: required
-      description: required interrupts
-      generation: define
-...
+  io-mapped:
+    type: boolean
+    description: specify registers are IO mapped or memory mapped

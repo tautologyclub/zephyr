@@ -1,7 +1,18 @@
 common:
   depends_on: netif
-  platform_whitelist: native_posix qemu_x86 qemu_cortex_m3
+  min_ram: 20
+  tags: net
 tests:
   net.packet:
-    min_ram: 20
-    tags: net
+    extra_configs:
+      - CONFIG_NET_TC_THREAD_COOPERATIVE=y
+  net.packet.preempt:
+    extra_configs:
+      - CONFIG_NET_TC_THREAD_PREEMPTIVE=y
+  net.packet.large_buffer:
+    extra_configs:
+      - CONFIG_NET_BUF_FIXED_DATA_SIZE=y
+      - CONFIG_NET_BUF_DATA_SIZE=512
+  net.packet.allocation_stats:
+    extra_configs:
+      - CONFIG_NET_PKT_ALLOC_STATS=y

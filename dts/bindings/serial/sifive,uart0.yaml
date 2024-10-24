@@ -1,36 +1,15 @@
-#
 # Copyright (c) 2018, SiFive Inc.
-#
 # SPDX-License-Identifier: Apache-2.0
-#
----
-title: SIFIVE UART
-version: 0.1
 
-description: >
-    This binding gives a base representation of the SIFIVE UART
+description: SiFive UART
 
-inherits:
-    !include uart.yaml
+compatible: "sifive,uart0"
+
+include: [uart-controller.yaml, pinctrl-device.yaml]
 
 properties:
-    compatible:
-      type: string
-      category: required
-      description: compatible strings
-      constraint: "sifive,uart0"
-      generation: define
+  reg:
+    required: true
 
-    reg:
-      type: array
-      description: mmio register space
-      generation: define
-      category: required
-
-    interrupts:
-      type: array
-      category: required
-      description: required interrupts
-      generation: define
-
-...
+  interrupts:
+    required: true

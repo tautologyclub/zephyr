@@ -10,45 +10,50 @@
 #include <stddef.h>
 #include <string.h>
 #include <errno.h>
-#include <misc/printk.h>
-#include <misc/byteorder.h>
-#include <zephyr.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/sys/byteorder.h>
+#include <zephyr/kernel.h>
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/conn.h>
-#include <bluetooth/uuid.h>
-#include <bluetooth/gatt.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/hci.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/uuid.h>
+#include <zephyr/bluetooth/gatt.h>
 
 static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
 };
 
-static void connected(struct bt_conn *conn, u8_t err)
+static const struct bt_data sd[] = {
+	BT_DATA(BT_DATA_NAME_COMPLETE, CONFIG_BT_DEVICE_NAME, sizeof(CONFIG_BT_DEVICE_NAME) - 1),
+};
+
+static void connected(struct bt_conn *conn, uint8_t err)
 {
 	char addr[BT_ADDR_LE_STR_LEN];
 
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
 	if (err) {
-		printk("Failed to connect to %s (%u)\n", addr, err);
+		printk("Failed to connect to %s %u %s\n", addr, err, bt_hci_err_to_str(err));
 		return;
 	}
 
 	printk("Connected %s\n", addr);
 
-	if (bt_conn_security(conn, BT_SECURITY_FIPS)) {
+	if (bt_conn_set_security(conn, BT_SECURITY_L4)) {
 		printk("Failed to set security\n");
 	}
 }
 
-static void disconnected(struct bt_conn *conn, u8_t reason)
+static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
 	char addr[BT_ADDR_LE_STR_LEN];
 
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
-	printk("Disconnected from %s (reason %u)\n", addr, reason);
+	printk("Disconnected from %s, reason 0x%02x %s\n", addr,
+	       reason, bt_hci_err_to_str(reason));
 }
 
 static void identity_resolved(struct bt_conn *conn, const bt_addr_le_t *rpa,
@@ -63,16 +68,22 @@ static void identity_resolved(struct bt_conn *conn, const bt_addr_le_t *rpa,
 	printk("Identity resolved %s -> %s\n", addr_rpa, addr_identity);
 }
 
-static void security_changed(struct bt_conn *conn, bt_security_t level)
+static void security_changed(struct bt_conn *conn, bt_security_t level,
+			     enum bt_security_err err)
 {
 	char addr[BT_ADDR_LE_STR_LEN];
 
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 
-	printk("Security changed: %s level %u\n", addr, level);
+	if (!err) {
+		printk("Security changed: %s level %u\n", addr, level);
+	} else {
+		printk("Security failed: %s level %u err %s(%d)\n", addr, level,
+		       bt_security_err_to_str(err), err);
+	}
 }
 
-static struct bt_conn_cb conn_callbacks = {
+BT_CONN_CB_DEFINE(conn_callbacks) = {
 	.connected = connected,
 	.disconnected = disconnected,
 	.identity_resolved = identity_resolved,
@@ -102,41 +113,44 @@ static void pairing_complete(struct bt_conn *conn, bool bonded)
 	printk("Pairing Complete\n");
 }
 
-static void pairing_failed(struct bt_conn *conn)
+static void pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
 {
-	printk("Pairing Failed. Disconnecting.\n");
-	bt_conn_disconnect(conn, BT_HCI_ERR_AUTHENTICATION_FAIL);
+	printk("Pairing Failed (%d). Disconnecting.\n", reason);
+	bt_conn_disconnect(conn, BT_HCI_ERR_AUTH_FAIL);
 }
 
 static struct bt_conn_auth_cb auth_cb_display = {
 	.passkey_display = auth_passkey_display,
 	.passkey_entry = NULL,
 	.cancel = auth_cancel,
+};
+
+static struct bt_conn_auth_info_cb auth_cb_info = {
 	.pairing_complete = pairing_complete,
 	.pairing_failed = pairing_failed,
 };
 
-void main(void)
+int main(void)
 {
 	int err;
 
 	err = bt_enable(NULL);
 	if (err) {
 		printk("Bluetooth init failed (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	printk("Bluetooth initialized\n");
 
-
 	bt_conn_auth_cb_register(&auth_cb_display);
-	bt_conn_cb_register(&conn_callbacks);
+	bt_conn_auth_info_cb_register(&auth_cb_info);
 
-	err = bt_le_adv_start(BT_LE_ADV_CONN_NAME, ad, ARRAY_SIZE(ad), NULL, 0);
+	err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
 	if (err) {
 		printk("Advertising failed to start (err %d)\n", err);
-		return;
+		return 0;
 	}
 
 	printk("Advertising successfully started\n");
+	return 0;
 }

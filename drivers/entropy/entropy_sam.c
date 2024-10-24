@@ -1,13 +1,18 @@
 /*
  * Copyright (c) 2018 Aurelien Jarno
+ * Copyright (c) 2023 Gerson Fernando Budke
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <device.h>
-#include <entropy.h>
+#define DT_DRV_COMPAT atmel_sam_trng
+
+#include <zephyr/device.h>
+#include <zephyr/drivers/entropy.h>
+#include <zephyr/drivers/clock_control/atmel_sam_pmc.h>
 #include <errno.h>
-#include <init.h>
+#include <zephyr/init.h>
+#include <zephyr/kernel.h>
 #include <soc.h>
 #include <string.h>
 
@@ -15,10 +20,26 @@ struct trng_sam_dev_cfg {
 	Trng *regs;
 };
 
-#define DEV_CFG(dev) \
-	((const struct trng_sam_dev_cfg *const)(dev)->config->config_info)
+static inline bool _ready(Trng * const trng)
+{
+#ifdef TRNG_ISR_DATRDY
+	return trng->TRNG_ISR & TRNG_ISR_DATRDY;
+#else
+	return trng->INTFLAG.bit.DATARDY;
+#endif
+}
 
-static int entropy_sam_wait_ready(Trng *const trng)
+static inline uint32_t _data(Trng * const trng)
+{
+#ifdef REG_TRNG_DATA
+	(void) trng;
+	return TRNG->DATA.reg;
+#else
+	return trng->TRNG_ODATA;
+#endif
+}
+
+static int entropy_sam_wait_ready(Trng * const trng)
 {
 	/* According to the reference manual, the generator provides
 	 * one 32-bit random value every 84 peripheral clock cycles.
@@ -31,25 +52,25 @@ static int entropy_sam_wait_ready(Trng *const trng)
 	 */
 	int timeout = 1000000;
 
-	while (!(trng->TRNG_ISR & TRNG_ISR_DATRDY)) {
+	while (!_ready(trng)) {
 		if (timeout-- == 0) {
 			return -ETIMEDOUT;
 		}
-
-		k_yield();
 	}
 
 	return 0;
 }
 
-static int entropy_sam_get_entropy(struct device *dev, u8_t *buffer,
-				   u16_t length)
+static int entropy_sam_get_entropy_internal(const struct device *dev,
+					    uint8_t *buffer,
+					    uint16_t length)
 {
-	Trng *const trng = DEV_CFG(dev)->regs;
+	const struct trng_sam_dev_cfg *config = dev->config;
+	Trng *const trng = config->regs;
 
 	while (length > 0) {
 		size_t to_copy;
-		u32_t value;
+		uint32_t value;
 		int res;
 
 		res = entropy_sam_wait_ready(trng);
@@ -57,7 +78,7 @@ static int entropy_sam_get_entropy(struct device *dev, u8_t *buffer,
 			return res;
 		}
 
-		value = trng->TRNG_ODATA;
+		value = _data(trng);
 		to_copy = MIN(length, sizeof(value));
 
 		memcpy(buffer, &value, to_copy);
@@ -68,28 +89,95 @@ static int entropy_sam_get_entropy(struct device *dev, u8_t *buffer,
 	return 0;
 }
 
-static int entropy_sam_init(struct device *dev)
+static int entropy_sam_get_entropy(const struct device *dev, uint8_t *buffer,
+				   uint16_t length)
 {
-	Trng *const trng = DEV_CFG(dev)->regs;
+	return entropy_sam_get_entropy_internal(dev, buffer, length);
+}
 
-	/* Enable the user interface clock */
-	soc_pmc_peripheral_enable(DT_ENTROPY_SAM_TRNG_PERIPHERAL_ID);
+static int entropy_sam_get_entropy_isr(const struct device *dev,
+				       uint8_t *buffer,
+				       uint16_t length, uint32_t flags)
+{
+	uint16_t cnt = length;
+
+
+	if ((flags & ENTROPY_BUSYWAIT) == 0U) {
+		const struct trng_sam_dev_cfg *config = dev->config;
+		/* No busy wait; return whatever data is available. */
+
+		Trng * const trng = config->regs;
+
+		do {
+			size_t to_copy;
+			uint32_t value;
+
+			if (!_ready(trng)) {
+
+				/* Data not ready */
+				break;
+			}
+
+			value = _data(trng);
+			to_copy = MIN(length, sizeof(value));
+
+			memcpy(buffer, &value, to_copy);
+			buffer += to_copy;
+			length -= to_copy;
+
+		} while (length > 0);
+
+		return cnt - length;
+
+	} else {
+		/* Allowed to busy-wait */
+		int ret =
+			entropy_sam_get_entropy_internal(dev,
+				buffer, length);
+
+		if (ret == 0) {
+			/* Data retrieved successfully. */
+			return cnt;
+		}
+
+		return ret;
+	}
+}
+
+static int entropy_sam_init(const struct device *dev)
+{
+	const struct trng_sam_dev_cfg *config = dev->config;
+	Trng *const trng = config->regs;
+
+#ifdef MCLK
+	/* Enable the MCLK */
+	MCLK->APBCMASK.bit.TRNG_ = 1;
+
+	/* Enable the TRNG */
+	trng->CTRLA.bit.ENABLE = 1;
+#else
+	/* Enable TRNG in PMC */
+	const struct atmel_sam_pmc_config clock_cfg = SAM_DT_INST_CLOCK_PMC_CFG(0);
+	(void)clock_control_on(SAM_DT_PMC_CONTROLLER,
+			       (clock_control_subsys_t)&clock_cfg);
 
 	/* Enable the TRNG */
 	trng->TRNG_CR = TRNG_CR_KEY_PASSWD | TRNG_CR_ENABLE;
-
+#endif
 	return 0;
 }
 
 static const struct entropy_driver_api entropy_sam_api = {
-	.get_entropy = entropy_sam_get_entropy
+	.get_entropy = entropy_sam_get_entropy,
+	.get_entropy_isr = entropy_sam_get_entropy_isr
 };
 
 static const struct trng_sam_dev_cfg trng_sam_cfg = {
-	.regs = (Trng *)DT_ENTROPY_SAM_TRNG_BASE_ADDRESS,
+	.regs = (Trng *)DT_INST_REG_ADDR(0),
 };
 
-DEVICE_AND_API_INIT(entropy_sam, CONFIG_ENTROPY_NAME,
-		    entropy_sam_init, NULL, &trng_sam_cfg,
-		    PRE_KERNEL_1, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,
+DEVICE_DT_INST_DEFINE(0,
+		    entropy_sam_init, NULL,
+		    NULL, &trng_sam_cfg,
+		    PRE_KERNEL_1, CONFIG_ENTROPY_INIT_PRIORITY,
 		    &entropy_sam_api);

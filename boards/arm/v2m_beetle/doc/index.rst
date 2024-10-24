@@ -15,10 +15,8 @@ the following devices:
 - Cortex-M System Design Kit GPIO
 - Cortex-M System Design Kit UART
 
-.. image:: img/v2m_beetle.png
-     :width: 442px
+.. image:: img/v2m_beetle.jpg
      :align: center
-     :height: 335px
      :alt: ARM V2M Beetle
 
 More information about the board can be found at the `V2M Beetle Website`_.
@@ -112,8 +110,9 @@ identifies the handlers used for each exception.
 |      |            | attempt to ARM |                          |
 |      |            | mode           |                          |
 +------+------------+----------------+--------------------------+
-| 11   | SVC        |                | context switch and       |
-|      |            |                | software interrupts      |
+| 11   | SVC        |                | system calls, kernel     |
+|      |            |                | run-time exceptions,     |
+|      |            |                | and IRQ offloading       |
 +------+------------+----------------+--------------------------+
 | 12   | Debug      |                | system fatal error       |
 |      | monitor    |                |                          |
@@ -135,8 +134,7 @@ All GPIO controller pins are exposed via the following sequence of pin numbers:
 
 Mapping from the ARM V2M Beetle Board pins to GPIO controllers:
 
-.. hlist::
-   :columns: 3
+.. rst-class:: rst-columns
 
    - D0 : P0_0
    - D1 : P0_1
@@ -173,8 +171,7 @@ Mapping from the ARM V2M Beetle Board pins to GPIO controllers:
 
 Peripheral Mapping:
 
-.. hlist::
-   :columns: 3
+.. rst-class:: rst-columns
 
    - UART_0_RX : D0
    - UART_0_TX : D1
@@ -193,7 +190,7 @@ Peripheral Mapping:
    - I2C_1_SDA : D22
    - I2C_1_SCL : D23
 
-For mode details please refer to `Beetle Technical Reference Manual (TRM)`_.
+For more details please refer to `Beetle Technical Reference Manual (TRM)`_.
 
 System Clock
 ============
@@ -232,7 +229,7 @@ Flashing an application to V2M Beetle
 -------------------------------------
 
 You can build applications in the usual way. Here is an example for
-the :ref:`hello_world` application.
+the :zephyr:code-sample:`hello_world` application.
 
 .. zephyr-app-commands::
    :zephyr-app: samples/hello_world
@@ -251,10 +248,10 @@ the following message:
 
 
 .. _V2M Beetle Website:
-   https://www.arm.com/products/tools/development-boards/versatile-express/beetle_iot_evaluation_platform.php
+   https://developer.arm.com/Tools%20and%20Software/Beetle%20IoT%20Evaluation%20Platform
 
 .. _Beetle Technical Reference Manual (TRM):
-   https://developer.arm.com/-/media/developer/products/system-design-tools/versatile-express-family/V2M-Beetle_TRM_draft.pdf?la=en
+   https://developer.arm.com/documentation/100417/latest/
 
 .. _CMSIS-DAP Website:
-   https://github.com/mbedmicro/CMSIS-DAP
+   https://arm-software.github.io/CMSIS_5/DAP/html/index.html

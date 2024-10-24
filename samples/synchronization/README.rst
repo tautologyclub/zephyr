@@ -1,7 +1,8 @@
-.. _synchronization_sample:
+.. zephyr:code-sample:: synchronization
+   :name: Basic Synchronization
+   :relevant-api: thread_apis semaphore_apis
 
-Synchronization Sample
-######################
+   Manipulate basic kernel synchronization primitives.
 
 Overview
 ********
@@ -42,3 +43,5 @@ Sample Output
    threadB: Hello World!
 
    <repeats endlessly>
+
+Exit QEMU by pressing :kbd:`CTRL+A` :kbd:`x`.

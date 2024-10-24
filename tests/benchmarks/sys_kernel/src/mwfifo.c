@@ -19,7 +19,6 @@ static struct k_fifo sync_fifo; /* for synchronization */
  *
  * @brief Initialize FIFOs for the test
  *
- * @return N/A
  */
 void fifo_test_init(void)
 {
@@ -36,20 +35,18 @@ void fifo_test_init(void)
  * @param par2   Number of test loops.
  * @param par3	 unused
  *
- * @return N/A
  */
 void fifo_thread1(void *par1, void *par2, void *par3)
 {
 	int i;
-	int element[2];
-	int *pelement;
-	int num_loops = (int) par2;
+	intptr_t element[2];
+	intptr_t *pelement;
+	int num_loops = POINTER_TO_INT(par2);
 
 	ARG_UNUSED(par1);
 	ARG_UNUSED(par3);
 	for (i = 0; i < num_loops; i++) {
-		pelement = (int *)k_fifo_get(&fifo1,
-						      K_FOREVER);
+		pelement = k_fifo_get(&fifo1, K_FOREVER);
 		if (pelement[1] != i) {
 			break;
 		}
@@ -69,23 +66,21 @@ void fifo_thread1(void *par1, void *par2, void *par3)
  * @param par2   Number of test cycles.
  * @param par3   unused
  *
- * @return N/A
  */
 void fifo_thread2(void *par1, void *par2, void *par3)
 {
 	int i;
-	int element[2];
-	int *pelement;
-	int *pcounter = (int *) par1;
-	int num_loops = (int) par2;
+	intptr_t element[2];
+	intptr_t *pelement;
+	int *pcounter = par1;
+	int num_loops = POINTER_TO_INT(par2);
 
 	ARG_UNUSED(par3);
 
 	for (i = 0; i < num_loops; i++) {
 		element[1] = i;
 		k_fifo_put(&fifo1, element);
-		pelement = (int *)k_fifo_get(&fifo2,
-						      K_FOREVER);
+		pelement = k_fifo_get(&fifo2, K_FOREVER);
 		if (pelement[1] != i) {
 			break;
 		}
@@ -104,23 +99,21 @@ void fifo_thread2(void *par1, void *par2, void *par3)
  * @param par2   Number of test cycles.
  * @param par3   unused
  *
- * @return N/A
  */
 void fifo_thread3(void *par1, void *par2, void *par3)
 {
 	int i;
-	int element[2];
-	int *pelement;
-	int *pcounter = (int *)par1;
-	int num_loops = (int) par2;
+	intptr_t element[2];
+	intptr_t *pelement;
+	int *pcounter = par1;
+	int num_loops = POINTER_TO_INT(par2);
 
 	ARG_UNUSED(par3);
 
 	for (i = 0; i < num_loops; i++) {
 		element[1] = i;
 		k_fifo_put(&fifo1, element);
-		while ((pelement = k_fifo_get(&fifo2,
-							K_NO_WAIT)) == NULL) {
+		while ((pelement = k_fifo_get(&fifo2, K_NO_WAIT)) == NULL) {
 			k_yield();
 		}
 		if (pelement[1] != i) {
@@ -141,10 +134,10 @@ void fifo_thread3(void *par1, void *par2, void *par3)
  */
 int fifo_test(void)
 {
-	u32_t t;
+	uint32_t t;
 	int i = 0;
 	int return_value = 0;
-	int element[2];
+	intptr_t element[2];
 	int j;
 
 	k_fifo_init(&sync_fifo);
@@ -163,10 +156,10 @@ int fifo_test(void)
 	t = BENCH_START();
 
 	k_thread_create(&thread_data1, thread_stack1, STACK_SIZE, fifo_thread1,
-			 NULL, (void *) number_of_loops, NULL,
+			 NULL, INT_TO_POINTER(number_of_loops), NULL,
 			 K_PRIO_COOP(3), 0, K_NO_WAIT);
 	k_thread_create(&thread_data2, thread_stack2, STACK_SIZE, fifo_thread2,
-			 (void *) &i, (void *) number_of_loops, NULL,
+			 &i, INT_TO_POINTER(number_of_loops), NULL,
 			 K_PRIO_COOP(3), 0, K_NO_WAIT);
 
 	t = TIME_STAMP_DELTA_GET(t);
@@ -175,7 +168,7 @@ int fifo_test(void)
 
 	/* threads have done their job, they can stop now safely: */
 	for (j = 0; j < 2; j++) {
-		k_fifo_put(&sync_fifo, (void *) element);
+		k_fifo_put(&sync_fifo, element);
 	}
 
 	/* test get/yield & put thread functions between co-op threads */
@@ -184,7 +177,7 @@ int fifo_test(void)
 	fprintf(output_file, sz_description,
 			"\n\tk_fifo_init"
 			"\n\tk_fifo_get(K_FOREVER)"
-			"\n\tk_fifo_get(TICKS_NONE)"
+			"\n\tk_fifo_get(K_NO_WAIT)"
 			"\n\tk_fifo_put"
 			"\n\tk_yield");
 	printf(sz_test_start_fmt);
@@ -195,10 +188,10 @@ int fifo_test(void)
 
 	i = 0;
 	k_thread_create(&thread_data1, thread_stack1, STACK_SIZE, fifo_thread1,
-			 NULL, (void *) number_of_loops, NULL,
+			 NULL, INT_TO_POINTER(number_of_loops), NULL,
 			 K_PRIO_COOP(3), 0, K_NO_WAIT);
 	k_thread_create(&thread_data2, thread_stack2, STACK_SIZE, fifo_thread3,
-			 (void *) &i, (void *) number_of_loops, NULL,
+			 &i, INT_TO_POINTER(number_of_loops), NULL,
 			 K_PRIO_COOP(3), 0, K_NO_WAIT);
 
 	t = TIME_STAMP_DELTA_GET(t);
@@ -207,10 +200,10 @@ int fifo_test(void)
 
 	/* threads have done their job, they can stop now safely: */
 	for (j = 0; j < 2; j++) {
-		k_fifo_put(&sync_fifo, (void *) element);
+		k_fifo_put(&sync_fifo, element);
 	}
 
-	/* test get wait & put functions between co-op and premptive threads */
+	/* test get wait & put functions between co-op and preemptive threads */
 	fprintf(output_file, sz_test_case_fmt,
 			"FIFO #3");
 	fprintf(output_file, sz_description,
@@ -226,27 +219,25 @@ int fifo_test(void)
 	t = BENCH_START();
 
 	k_thread_create(&thread_data1, thread_stack1, STACK_SIZE, fifo_thread1,
-			 NULL, (void *) (number_of_loops / 2U), NULL,
+			 NULL, INT_TO_POINTER(number_of_loops / 2U), NULL,
 			 K_PRIO_COOP(3), 0, K_NO_WAIT);
 	k_thread_create(&thread_data2, thread_stack2, STACK_SIZE, fifo_thread1,
-			 NULL, (void *) (number_of_loops / 2U), NULL,
+			 NULL, INT_TO_POINTER(number_of_loops / 2U), NULL,
 			 K_PRIO_COOP(3), 0, K_NO_WAIT);
 	for (i = 0; i < number_of_loops / 2U; i++) {
-		int element[2];
-		int *pelement;
+		intptr_t more_element[2];
+		intptr_t *pelement;
 
-		element[1] = i;
-		k_fifo_put(&fifo1, element);
-		element[1] = i;
-		k_fifo_put(&fifo1, element);
+		more_element[1] = i;
+		k_fifo_put(&fifo1, more_element);
+		more_element[1] = i;
+		k_fifo_put(&fifo1, more_element);
 
-		pelement = (int *)k_fifo_get(&fifo2,
-						     K_FOREVER);
+		pelement = k_fifo_get(&fifo2, K_FOREVER);
 		if (pelement[1] != i) {
 			break;
 		}
-		pelement = (int *)k_fifo_get(&fifo2,
-						     K_FOREVER);
+		pelement = k_fifo_get(&fifo2, K_FOREVER);
 		if (pelement[1] != i) {
 			break;
 		}
@@ -257,7 +248,7 @@ int fifo_test(void)
 
 	/* threads have done their job, they can stop now safely: */
 	for (j = 0; j < 2; j++) {
-		k_fifo_put(&sync_fifo, (void *) element);
+		k_fifo_put(&sync_fifo, element);
 	}
 
 	return return_value;

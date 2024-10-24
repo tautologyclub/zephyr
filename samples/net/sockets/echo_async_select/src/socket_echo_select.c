@@ -9,30 +9,40 @@
 #include <errno.h>
 #include <stdlib.h>
 
-#ifndef __ZEPHYR__
+#if !defined(__ZEPHYR__)
 
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/select.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <fcntl.h>
 
+/* Generic read()/write() is available in POSIX config, so use it. */
+#define READ(fd, buf, sz) read(fd, buf, sz)
+#define WRITE(fd, buf, sz) write(fd, buf, sz)
+
 #else
 
-#include <fcntl.h>
-#include <net/socket.h>
-#include <kernel.h>
+#include <zephyr/posix/fcntl.h>
+#include <zephyr/posix/sys/select.h>
+#include <zephyr/net/socket.h>
+#include <zephyr/kernel.h>
+
+/* Generic read()/write() are not defined, so use socket-specific recv(). */
+#define READ(fd, buf, sz) recv(fd, buf, sz, 0)
+#define WRITE(fd, buf, sz) send(fd, buf, sz, 0)
 
 #endif
 
 /* For Zephyr, keep max number of fd's in sync with max poll() capacity */
-#ifdef CONFIG_NET_SOCKETS_POLL_MAX
-#define NUM_FDS CONFIG_NET_SOCKETS_POLL_MAX
+#ifdef CONFIG_ZVFS_POLL_MAX
+#define NUM_FDS CONFIG_ZVFS_POLL_MAX
 #else
 #define NUM_FDS 5
 #endif
 
-#define PORT 4242
+#define BIND_PORT 4242
 
 /* Number of simultaneous client connections will be NUM_FDS be minus 2 */
 fd_set readfds;
@@ -86,20 +96,25 @@ int main(void)
 {
 	int res;
 	static int counter;
-	int serv4, serv6;
+#if !defined(CONFIG_SOC_SERIES_CC32XX)
+	int serv4;
 	struct sockaddr_in bind_addr4 = {
 		.sin_family = AF_INET,
-		.sin_port = htons(PORT),
+		.sin_port = htons(BIND_PORT),
 		.sin_addr = {
 			.s_addr = htonl(INADDR_ANY),
 		},
 	};
+#endif
+	int serv6;
 	struct sockaddr_in6 bind_addr6 = {
 		.sin6_family = AF_INET6,
-		.sin6_port = htons(PORT),
+		.sin6_port = htons(BIND_PORT),
 		.sin6_addr = IN6ADDR_ANY_INIT,
 	};
 
+	FD_ZERO(&readfds);
+#if !defined(CONFIG_SOC_SERIES_CC32XX)
 	serv4 = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (serv4 < 0) {
 		printf("error: socket: %d\n", errno);
@@ -111,6 +126,10 @@ int main(void)
 		printf("Cannot bind IPv4, errno: %d\n", errno);
 	}
 
+	setblocking(serv4, false);
+	listen(serv4, 5);
+	pollfds_add(serv4);
+#endif
 	serv6 = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
 	if (serv6 < 0) {
 		printf("error: socket(AF_INET6): %d\n", errno);
@@ -132,17 +151,12 @@ int main(void)
 		printf("Cannot bind IPv6, errno: %d\n", errno);
 	}
 
-	FD_ZERO(&readfds);
-
-	setblocking(serv4, false);
 	setblocking(serv6, false);
-	listen(serv4, 5);
 	listen(serv6, 5);
-
-	pollfds_add(serv4);
 	pollfds_add(serv6);
 
-	printf("Async select-based TCP echo server waits for connections on port %d...\n", PORT);
+	printf("Async select-based TCP echo server waits for connections on "
+	       "port %d...\n", BIND_PORT);
 
 	while (1) {
 		struct sockaddr_storage client_addr;
@@ -164,7 +178,16 @@ int main(void)
 				continue;
 			}
 			int fd = i;
+#if defined(CONFIG_SOC_SERIES_CC32XX)
+			/*
+			 * On TI CC32xx, the same port cannot be bound to two
+			 * different sockets. Instead, the IPv6 socket is used
+			 * to handle both IPv4 and IPv6 connections.
+			 */
+			if (fd == serv6) {
+#else
 			if (fd == serv4 || fd == serv6) {
+#endif
 				/* If server socket */
 				int client = accept(fd, (struct sockaddr *)&client_addr,
 						    &client_addr_len);
@@ -176,17 +199,18 @@ int main(void)
 				       addr_str, client);
 				if (pollfds_add(client) < 0) {
 					static char msg[] = "Too many connections\n";
-					send(client, msg, sizeof(msg) - 1, 0);
+					WRITE(client, msg, sizeof(msg) - 1);
 					close(client);
 				} else {
 					setblocking(client, false);
 				}
 			} else {
 				char buf[128];
-				int len = recv(fd, buf, sizeof(buf), 0);
+				int len = READ(fd, buf, sizeof(buf));
 				if (len <= 0) {
 					if (len < 0) {
-						printf("error: recv: %d\n", errno);
+						printf("error: RECV: %d\n",
+						       errno);
 					}
 error:
 					pollfds_del(fd);
@@ -205,10 +229,10 @@ error:
 					setblocking(fd, true);
 
 					for (p = buf; len; len -= out_len) {
-						out_len = send(fd, p, len, 0);
+						out_len = WRITE(fd, p, len);
 						if (out_len < 0) {
 							printf("error: "
-							       "send: %d\n",
+							       "WRITE: %d\n",
 							       errno);
 							goto error;
 						}
@@ -220,4 +244,5 @@ error:
 			}
 		}
 	}
+	return 0;
 }

@@ -24,8 +24,9 @@
  */
 
 
+#include <zephyr/kernel.h>
+#include <kernel_arch_data.h>
 #include <gen_offset.h>
-#include <kernel_structs.h>
 #include <kernel_offsets.h>
 
 /* struct coop member offsets */
@@ -43,30 +44,24 @@ GEN_OFFSET_SYM(_callee_saved_t, sp);
 GEN_OFFSET_SYM(_callee_saved_t, key);
 GEN_OFFSET_SYM(_callee_saved_t, retval);
 
-GEN_OFFSET_SYM(NANO_ESF, ra);
-GEN_OFFSET_SYM(NANO_ESF, r1);
-GEN_OFFSET_SYM(NANO_ESF, r2);
-GEN_OFFSET_SYM(NANO_ESF, r3);
-GEN_OFFSET_SYM(NANO_ESF, r4);
-GEN_OFFSET_SYM(NANO_ESF, r5);
-GEN_OFFSET_SYM(NANO_ESF, r6);
-GEN_OFFSET_SYM(NANO_ESF, r7);
-GEN_OFFSET_SYM(NANO_ESF, r8);
-GEN_OFFSET_SYM(NANO_ESF, r9);
-GEN_OFFSET_SYM(NANO_ESF, r10);
-GEN_OFFSET_SYM(NANO_ESF, r11);
-GEN_OFFSET_SYM(NANO_ESF, r12);
-GEN_OFFSET_SYM(NANO_ESF, r13);
-GEN_OFFSET_SYM(NANO_ESF, r14);
-GEN_OFFSET_SYM(NANO_ESF, r15);
-GEN_OFFSET_SYM(NANO_ESF, estatus);
-GEN_OFFSET_SYM(NANO_ESF, instr);
-GEN_ABSOLUTE_SYM(__NANO_ESF_SIZEOF, sizeof(NANO_ESF));
-
-/*
- * size of the struct k_thread structure sans save area for floating
- * point regs
- */
-GEN_ABSOLUTE_SYM(_K_THREAD_NO_FLOAT_SIZEOF, sizeof(struct k_thread));
+GEN_OFFSET_STRUCT(arch_esf, ra);
+GEN_OFFSET_STRUCT(arch_esf, r1);
+GEN_OFFSET_STRUCT(arch_esf, r2);
+GEN_OFFSET_STRUCT(arch_esf, r3);
+GEN_OFFSET_STRUCT(arch_esf, r4);
+GEN_OFFSET_STRUCT(arch_esf, r5);
+GEN_OFFSET_STRUCT(arch_esf, r6);
+GEN_OFFSET_STRUCT(arch_esf, r7);
+GEN_OFFSET_STRUCT(arch_esf, r8);
+GEN_OFFSET_STRUCT(arch_esf, r9);
+GEN_OFFSET_STRUCT(arch_esf, r10);
+GEN_OFFSET_STRUCT(arch_esf, r11);
+GEN_OFFSET_STRUCT(arch_esf, r12);
+GEN_OFFSET_STRUCT(arch_esf, r13);
+GEN_OFFSET_STRUCT(arch_esf, r14);
+GEN_OFFSET_STRUCT(arch_esf, r15);
+GEN_OFFSET_STRUCT(arch_esf, estatus);
+GEN_OFFSET_STRUCT(arch_esf, instr);
+GEN_ABSOLUTE_SYM(__struct_arch_esf_SIZEOF, sizeof(struct arch_esf));
 
 GEN_ABS_SYM_END

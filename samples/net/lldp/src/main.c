@@ -4,22 +4,20 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(net_lldp_sample, LOG_LEVEL_DBG);
 
-#include <zephyr.h>
-
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <errno.h>
 
-#include <net/net_core.h>
-#include <net/net_l2.h>
-#include <net/net_if.h>
-#include <net/ethernet.h>
+#include <zephyr/net/net_core.h>
+#include <zephyr/net/net_l2.h>
+#include <zephyr/net/net_if.h>
+#include <zephyr/net/ethernet.h>
 
 static struct lldp_system_name_tlv {
-	u16_t type_length;
-	u8_t name[4];
+	uint16_t type_length;
+	uint8_t name[4];
 } __packed tlv = {
 	.name = { 't', 'e', 's', 't' },
 };
@@ -29,23 +27,22 @@ static void set_optional_tlv(struct net_if *iface)
 	NET_DBG("");
 
 	tlv.type_length = htons((LLDP_TLV_SYSTEM_NAME << 9) |
-				((sizeof(tlv) - sizeof(u16_t)) & 0x01ff));
+				((sizeof(tlv) - sizeof(uint16_t)) & 0x01ff));
 
-	net_lldp_config_optional(iface, (u8_t *)&tlv, sizeof(tlv));
+	net_lldp_config_optional(iface, (uint8_t *)&tlv, sizeof(tlv));
 }
 
 /* User data for the interface callback */
 struct ud {
 	struct net_if *first;
 	struct net_if *second;
-	struct net_if *third;
 };
 
 static void iface_cb(struct net_if *iface, void *user_data)
 {
 	struct ud *ud = user_data;
 
-	if (net_if_l2(iface) != &NET_L2_GET_NAME(ETHERNET)) {
+	if (net_if_l2(iface) != &NET_L2_GET_NAME(VIRTUAL)) {
 		return;
 	}
 
@@ -58,22 +55,20 @@ static void iface_cb(struct net_if *iface, void *user_data)
 		ud->second = iface;
 		return;
 	}
-
-	if (!ud->third) {
-		ud->third = iface;
-		return;
-	}
 }
 
-static int setup_iface(struct net_if *iface, const char *ipv6_addr,
-		       const char *ipv4_addr, u16_t vlan_tag)
+static int setup_iface(struct net_if *eth_iface,
+		       struct net_if *iface,
+		       const char *ipv6_addr,
+		       const char *ipv4_addr,
+		       uint16_t vlan_tag)
 {
 	struct net_if_addr *ifaddr;
 	struct in_addr addr4;
 	struct in6_addr addr6;
 	int ret;
 
-	ret = net_eth_vlan_enable(iface, vlan_tag);
+	ret = net_eth_vlan_enable(eth_iface, vlan_tag);
 	if (ret < 0) {
 		LOG_ERR("Cannot enable VLAN for tag %d (%d)", vlan_tag, ret);
 	}
@@ -90,7 +85,7 @@ static int setup_iface(struct net_if *iface, const char *ipv6_addr,
 	}
 
 	if (net_addr_pton(AF_INET, ipv4_addr, &addr4)) {
-		LOG_ERR("Invalid address: %s", ipv6_addr);
+		LOG_ERR("Invalid address: %s", ipv4_addr);
 		return -EINVAL;
 	}
 
@@ -107,19 +102,22 @@ static int setup_iface(struct net_if *iface, const char *ipv6_addr,
 
 static struct ud ud;
 
-static int init_vlan(void)
+static int init_vlan(struct net_if *iface)
 {
+	enum ethernet_hw_caps caps;
 	int ret;
 
 	(void)memset(&ud, 0, sizeof(ud));
 
 	net_if_foreach(iface_cb, &ud);
 
-	/* This sample has two VLANs. For the second one we need to manually
-	 * create IP address for this test. But first the VLAN needs to be
-	 * added to the interface so that IPv6 DAD can work properly.
-	 */
-	ret = setup_iface(ud.second,
+	caps = net_eth_get_hw_capabilities(iface);
+	if (!(caps & ETHERNET_HW_VLAN)) {
+		LOG_DBG("Interface %p does not support %s", iface, "VLAN");
+		return -ENOENT;
+	}
+
+	ret = setup_iface(iface, ud.first,
 			  CONFIG_NET_SAMPLE_IFACE2_MY_IPV6_ADDR,
 			  CONFIG_NET_SAMPLE_IFACE2_MY_IPV4_ADDR,
 			  CONFIG_NET_SAMPLE_IFACE2_VLAN_TAG);
@@ -127,7 +125,7 @@ static int init_vlan(void)
 		return ret;
 	}
 
-	ret = setup_iface(ud.third,
+	ret = setup_iface(iface, ud.second,
 			  CONFIG_NET_SAMPLE_IFACE3_MY_IPV6_ADDR,
 			  CONFIG_NET_SAMPLE_IFACE3_MY_IPV4_ADDR,
 			  CONFIG_NET_SAMPLE_IFACE3_VLAN_TAG);
@@ -135,19 +133,23 @@ static int init_vlan(void)
 		return ret;
 	}
 
+	/* Bring up the VLAN interface automatically */
+	net_if_up(ud.first);
+	net_if_up(ud.second);
+
 	return 0;
 }
 
 static enum net_verdict parse_lldp(struct net_if *iface, struct net_pkt *pkt)
 {
-	LOG_DBG("iface %p Parsing LLDP, len %u", iface, net_pkt_get_len(pkt));
+	LOG_DBG("iface %p Parsing LLDP, len %zu", iface, net_pkt_get_len(pkt));
 
 	net_pkt_cursor_init(pkt);
 
 	while (1) {
-		u16_t type_length;
-		u16_t length;
-		u8_t type;
+		uint16_t type_length;
+		uint16_t length;
+		uint8_t type;
 
 		if (net_pkt_read_be16(pkt, &type_length)) {
 			LOG_DBG("End LLDP DU TLV");
@@ -155,7 +157,7 @@ static enum net_verdict parse_lldp(struct net_if *iface, struct net_pkt *pkt)
 		}
 
 		length = type_length & 0x1FF;
-		type = (u8_t)(type_length >> 9);
+		type = (uint8_t)(type_length >> 9);
 
 		/* Skip for now data */
 		if (net_pkt_skip(pkt, length)) {
@@ -188,21 +190,40 @@ static enum net_verdict parse_lldp(struct net_if *iface, struct net_pkt *pkt)
 
 static int init_app(void)
 {
-	if (init_vlan() < 0) {
-		LOG_ERR("Cannot setup VLAN");
+	enum ethernet_hw_caps caps;
+	struct net_if *iface;
+	int ret;
+
+	iface = net_if_get_first_by_type(&NET_L2_GET_NAME(ETHERNET));
+	if (!iface) {
+		LOG_ERR("No ethernet interfaces found.");
+		return -ENOENT;
 	}
 
-	set_optional_tlv(ud.first);
-	net_lldp_register_callback(ud.first, parse_lldp);
+	ret = init_vlan(iface);
+	if (ret < 0) {
+		LOG_WRN("Cannot setup VLAN (%d)", ret);
+	}
+
+	caps = net_eth_get_hw_capabilities(iface);
+	if (!(caps & ETHERNET_LLDP)) {
+		LOG_ERR("Interface %p does not support %s", iface, "LLDP");
+		LOG_ERR("Cannot continue!");
+		return -ENOENT;
+	}
+
+	set_optional_tlv(iface);
+	net_lldp_register_callback(iface, parse_lldp);
 
 	return 0;
 }
 
-void main(void)
+int main(void)
 {
 	/* The application will setup VLAN but does nothing meaningful.
 	 * The configuration will enable LLDP support so you should see
 	 * LLDPDU messages sent to the network interface.
 	 */
 	init_app();
+	return 0;
 }

@@ -17,23 +17,22 @@
  */
 
 #include <zephyr/types.h>
-#include <toolchain.h>
-#include <linker/linker-defs.h>
-#include <arch/arc/v2/aux_regs.h>
-#include <kernel_structs.h>
+#include <zephyr/toolchain.h>
+#include <zephyr/linker/linker-defs.h>
+#include <zephyr/arch/arc/v2/aux_regs.h>
+#include <zephyr/arch/arc/cluster.h>
+#include <zephyr/kernel_structs.h>
 #include <kernel_internal.h>
-
+#include <zephyr/platform/hooks.h>
+#include <zephyr/arch/cache.h>
 
 /* XXX - keep for future use in full-featured cache APIs */
 #if 0
 /**
- *
  * @brief Disable the i-cache if present
  *
  * For those ARC CPUs that have a i-cache present,
  * invalidate the i-cache and then disable it.
- *
- * @return N/A
  */
 
 static void disable_icache(void)
@@ -46,18 +45,15 @@ static void disable_icache(void)
 		return; /* skip if i-cache is not present */
 	}
 	z_arc_v2_aux_reg_write(_ARC_V2_IC_IVIC, 0);
-	__asm__ __volatile__ ("nop");
+	__builtin_arc_nop();
 	z_arc_v2_aux_reg_write(_ARC_V2_IC_CTRL, 1);
 }
 
 /**
- *
  * @brief Invalidate the data cache if present
  *
  * For those ARC CPUs that have a data cache present,
  * invalidate the data cache.
- *
- * @return N/A
  */
 
 static void invalidate_dcache(void)
@@ -73,54 +69,85 @@ static void invalidate_dcache(void)
 }
 #endif
 
-/**
- *
- * @brief Adjust the vector table base
- *
- * Set the vector table base if the value found in the
- * _ARC_V2_IRQ_VECT_BASE auxiliary register is different from the
- * _VectorTable known by software. It is important to do this very early
- * so that exception vectors can be handled.
- *
- * @return N/A
- */
-
-static void adjust_vector_table_base(void)
+#ifdef CONFIG_ISA_ARCV3
+/* NOTE: it will be called from early C code - we must NOT use global / static variables in it! */
+static void arc_cluster_scm_enable(void)
 {
-#ifdef CONFIG_ARC_HAS_SECURE
-#undef _ARC_V2_IRQ_VECT_BASE
-#define _ARC_V2_IRQ_VECT_BASE _ARC_V2_IRQ_VECT_BASE_S
-#endif
-	extern struct vector_table _VectorTable;
-	unsigned int vbr;
-	/* if the compiled-in vector table is different
-	 * from the base address known by the ARC CPU,
-	 * set the vector base to the compiled-in address.
-	 */
-	vbr = z_arc_v2_aux_reg_read(_ARC_V2_IRQ_VECT_BASE);
-	vbr &= 0xfffffc00;
-	if (vbr != (unsigned int)&_VectorTable) {
-		z_arc_v2_aux_reg_write(_ARC_V2_IRQ_VECT_BASE,
-					(unsigned int)&_VectorTable);
+	unsigned int cluster_version;
+
+	/* Check that we have cluster and its version is supported */
+	cluster_version = z_arc_v2_aux_reg_read(_ARC_REG_CLN_BCR) & _ARC_CLN_BCR_VER_MAJOR_MASK;
+	if (cluster_version < _ARC_REG_CLN_BCR_VER_MAJOR_ARCV3_MIN) {
+		return;
 	}
+
+	/* Check that we have shared cache in cluster */
+	if (!(z_arc_v2_aux_reg_read(_ARC_CLNR_BCR_0) & _ARC_CLNR_BCR_0_HAS_SCM)) {
+		return;
+	}
+
+	/* Disable SCM, just in case. */
+	arc_cln_write_reg_nolock(ARC_CLN_CACHE_STATUS, 0);
+
+	/* Invalidate SCM before enabling. */
+	arc_cln_write_reg_nolock(ARC_CLN_CACHE_CMD,
+				 ARC_CLN_CACHE_CMD_OP_REG_INV | ARC_CLN_CACHE_CMD_INCR);
+	while (arc_cln_read_reg_nolock(ARC_CLN_CACHE_STATUS) & ARC_CLN_CACHE_STATUS_BUSY)
+		;
+
+	arc_cln_write_reg_nolock(ARC_CLN_CACHE_STATUS, ARC_CLN_CACHE_STATUS_EN);
 }
+#endif /* CONFIG_ISA_ARCV3 */
+
+#ifdef __CCAC__
+extern char __device_states_start[];
+extern char __device_states_end[];
+/**
+ * @brief Clear device_states section
+ *
+ * This routine clears the device_states section,
+ * as MW compiler marks the section with NOLOAD flag.
+ */
+static void dev_state_zero(void)
+{
+	z_early_memset(__device_states_start, 0, __device_states_end - __device_states_start);
+}
+#endif
 
 extern FUNC_NORETURN void z_cstart(void);
+extern void arc_mpu_init(void);
+extern void arc_secureshield_init(void);
+
 /**
- *
  * @brief Prepare to and run C code
  *
  * This routine prepares for the execution of and runs C code.
- *
- * @return N/A
  */
 
-void _PrepC(void)
+void z_prep_c(void)
 {
-	z_icache_setup();
-	adjust_vector_table_base();
+#if defined(CONFIG_SOC_PREP_HOOK)
+	soc_prep_hook();
+#endif
+
+#ifdef CONFIG_ISA_ARCV3
+	arc_cluster_scm_enable();
+#endif
+
 	z_bss_zero();
+#ifdef __CCAC__
+	dev_state_zero();
+#endif
 	z_data_copy();
+#if CONFIG_ARCH_CACHE
+	arch_cache_init();
+#endif
+#ifdef CONFIG_ARC_MPU
+	arc_mpu_init();
+#endif
+#ifdef CONFIG_ARC_SECURE_FIRMWARE
+	arc_secureshield_init();
+#endif
 	z_cstart();
 	CODE_UNREACHABLE;
 }

@@ -20,27 +20,21 @@
 #ifndef ZEPHYR_ARCH_ARC_INCLUDE_KERNEL_ARCH_FUNC_H_
 #define ZEPHYR_ARCH_ARC_INCLUDE_KERNEL_ARCH_FUNC_H_
 
+#if !defined(_ASMLANGUAGE)
+
+#include <kernel_arch_data.h>
+
+#include <v2/irq.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#if !defined(_ASMLANGUAGE)
-
-#ifdef CONFIG_CPU_ARCV2
-#include <v2/cache.h>
-#include <v2/irq.h>
-#endif
-
-static ALWAYS_INLINE void kernel_arch_init(void)
+static ALWAYS_INLINE void arch_kernel_init(void)
 {
 	z_irq_setup();
 }
 
-static ALWAYS_INLINE void
-z_set_thread_return_value(struct k_thread *thread, unsigned int value)
-{
-	thread->arch.return_value = value;
-}
 
 /**
  *
@@ -51,23 +45,46 @@ z_set_thread_return_value(struct k_thread *thread, unsigned int value)
  */
 static ALWAYS_INLINE int Z_INTERRUPT_CAUSE(void)
 {
-	u32_t irq_num = z_arc_v2_aux_reg_read(_ARC_V2_ICAUSE);
+	uint32_t irq_num = z_arc_v2_aux_reg_read(_ARC_V2_ICAUSE);
 
 	return irq_num;
 }
 
-#define z_is_in_isr	z_arc_v2_irq_unit_is_in_isr
+static inline bool arch_is_in_isr(void)
+{
+	return z_arc_v2_irq_unit_is_in_isr();
+}
 
 extern void z_thread_entry_wrapper(void);
 extern void z_user_thread_entry_wrapper(void);
 
 extern void z_arc_userspace_enter(k_thread_entry_t user_entry, void *p1,
-		 void *p2, void *p3, u32_t stack, u32_t size);
+		 void *p2, void *p3, uint32_t stack, uint32_t size,
+		 struct k_thread *thread);
 
-#endif /* _ASMLANGUAGE */
+extern void z_arc_fatal_error(unsigned int reason, const struct arch_esf *esf);
+
+extern void z_arc_switch(void *switch_to, void **switched_from);
+
+static inline void arch_switch(void *switch_to, void **switched_from)
+{
+	z_arc_switch(switch_to, switched_from);
+}
+
+#if !defined(CONFIG_MULTITHREADING)
+extern FUNC_NORETURN void z_arc_switch_to_main_no_multithreading(
+	k_thread_entry_t main_func, void *p1, void *p2, void *p3);
+
+#define ARCH_SWITCH_TO_MAIN_NO_MULTITHREADING \
+	z_arc_switch_to_main_no_multithreading
+
+#endif /* !CONFIG_MULTITHREADING */
+
 
 #ifdef __cplusplus
 }
 #endif
+
+#endif /* _ASMLANGUAGE */
 
 #endif /* ZEPHYR_ARCH_ARC_INCLUDE_KERNEL_ARCH_FUNC_H_ */

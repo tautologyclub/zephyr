@@ -1,16 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
-choice
-	prompt "SoC/CPU/Configuration Selection"
-
-source "$(SOC_DIR)/$(ARCH)/*/Kconfig.soc"
-
-endchoice
+# Only v1 model has choice for SoC selection, therefore the optional source
+# Sourced here and not in Kconfig.v1 to keep current SoC/CPU selection menu
+# side-by-side with "Hardware Configuration" in the menu structure.
+orsource "Kconfig.$(HWM_SCHEME).choice"
 
 menu "Hardware Configuration"
-osource "$(SOC_DIR)/$(ARCH)/Kconfig"
-osource "$(SOC_DIR)/$(ARCH)/*/Kconfig"
 
+rsource "Kconfig.$(HWM_SCHEME)"
+
+# Source Zephyr Kconfig specifics from SoC roots.
+osource "$(KCONFIG_BINARY_DIR)/soc/Kconfig"
+
+# Source common Kconfig file
+osource "soc/common/Kconfig"
 
 module = SOC
 module-str = SOC
@@ -19,8 +22,7 @@ source "subsys/logging/Kconfig.template.log_config"
 endmenu
 
 # The helper symbols below are put here due to an unusual setup: The simulated
-# nrf52_bsim board uses the POSIX arch, but is compatible with Nordic ARM
-# boards
+# nrf5x_bsim boards use the POSIX arch, but are compatible with Nordic ARM boards
 
 config SOC_COMPATIBLE_NRF
 	bool
@@ -28,43 +30,45 @@ config SOC_COMPATIBLE_NRF
 config SOC_COMPATIBLE_NRF52X
 	bool
 
-config SOC_COMPATIBLE_NRF52832
+config SOC_COMPATIBLE_NRF53X
 	bool
 
-#
-# SOC_*_LD: SoC specific Linker script additions
-#
+config SOC_COMPATIBLE_NRF54LX
+	bool
 
-if ARC || ARM || X86 || NIOS2 || RISCV32
+config SOC_COMPATIBLE_NRF52833
+	bool
 
-config SOC_NOINIT_LD
+config SOC_COMPATIBLE_NRF5340_CPUNET
+	bool
+
+config SOC_COMPATIBLE_NRF5340_CPUAPP
+	bool
+
+config SOC_COMPATIBLE_NRF54L15
+	bool
+
+config SOC_COMPATIBLE_NRF54L15_CPUAPP
+	bool
+
+config SOC_DEPRECATED_RELEASE
+	string
+	help
+	  This hidden option is set in the SoC configuration and indicates
+	  the Zephyr release that the SoC configuration will be removed.
+	  When set, any build for that SoC will generate a clearly visible
+	  deprecation warning.
+	  When adding this to a SOC, remember to follow the instructions in
+	  https://docs.zephyrproject.org/latest/develop/api/api_lifecycle.html#deprecated
+
+config SOC_HAS_TIMING_FUNCTIONS
 	bool
 	help
-	  Include an SoC specific linker script fragment named soc-noinit.ld
-	  for inserting additional data and linker directives into
-	  the noinit section.
+	  Should be selected if SoC provides custom method for retrieving
+	  timestamps and cycle count.
 
-	  This only has effect if the SoC uses the common linker script
-	  under include/arch/.
-
-config SOC_RODATA_LD
+config SOC_HAS_RUNTIME_NUM_CPUS
 	bool
 	help
-	  Include an SoC specific linker script fragment named soc-rodata.ld
-	  for inserting additional data and linker directives into
-	  the rodata section.
-
-	  This only has effect if the SoC uses the common linker script
-	  under include/arch/.
-
-config SOC_RWDATA_LD
-	bool
-	help
-	  Include an SoC specific linker script fragment named soc-rwdata.ld
-	  for inserting additional data and linker directives into
-	  the data section.
-
-	  This only has effect if the SoC uses the common linker script
-	  under include/arch/.
-
-endif # ARC || ARM || X86 || NIOS2 || RISCV32
+	  Should be selected if SoC handles determining the number of CPUs
+	  at runtime.

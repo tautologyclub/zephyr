@@ -4,36 +4,37 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <zephyr.h>
-#include <init.h>
+#include <zephyr/kernel.h>
+#include <zephyr/init.h>
 #include <stdio.h>
-#include <sensor.h>
+#include <zephyr/drivers/sensor.h>
 
 #ifdef CONFIG_GROVE_LCD_RGB
-#include <display/grove_lcd.h>
+#include <zephyr/drivers/misc/grove_lcd/grove_lcd.h>
 #include <stdio.h>
 #include <string.h>
 #endif
 
-#define SLEEP_TIME	1000
+#define SLEEP_TIME	K_MSEC(1000)
 
-void main(void)
+int main(void)
 {
-	struct device *dev = device_get_binding(CONFIG_GROVE_TEMPERATURE_SENSOR_NAME);
+	const struct device *const dev = DEVICE_DT_GET_ONE(seeed_grove_temperature);
 	struct sensor_value temp;
 	int read;
 
-	if (dev == NULL) {
-		printf("device not found.  aborting test.\n");
-		return;
+	if (!device_is_ready(dev)) {
+		printk("sensor: device not ready.\n");
+		return 0;
 	}
+
 #ifdef CONFIG_GROVE_LCD_RGB
-	struct device *glcd;
+	const struct device *glcd;
 
 	glcd = device_get_binding(GROVE_LCD_NAME);
 	if (glcd == NULL) {
 		printf("Failed to get Grove LCD\n");
-		return;
+		return 0;
 	}
 
 	/* configure LCD */
@@ -62,7 +63,7 @@ void main(void)
 
 		/* display temperature on LCD */
 		glcd_cursor_pos_set(glcd, 0, 0);
-#ifdef CONFIG_NEWLIB_LIBC_FLOAT_PRINTF
+#ifdef CONFIG_REQUIRES_FLOAT_PRINTF
 		sprintf(row, "T:%.2f%cC",
 			sensor_value_to_double(&temp),
 			223 /* degree symbol */);
@@ -74,7 +75,7 @@ void main(void)
 
 #endif
 
-#ifdef CONFIG_NEWLIB_LIBC_FLOAT_PRINTF
+#ifdef CONFIG_REQUIRES_FLOAT_PRINTF
 		printf("Temperature: %.2f C\n", sensor_value_to_double(&temp));
 #else
 		printk("Temperature: %d\n", temp.val1);

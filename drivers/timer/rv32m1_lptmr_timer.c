@@ -4,10 +4,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <zephyr.h>
-#include <misc/util.h>
-#include <system_timer.h>
+#define DT_DRV_COMPAT openisa_rv32m1_lptmr
+
+#include <zephyr/init.h>
+#include <zephyr/kernel.h>
+#include <zephyr/sys/util.h>
+#include <zephyr/drivers/timer/system_timer.h>
 #include <soc.h>
+#include <zephyr/irq.h>
 
 /*
  * This is just a getting started point.
@@ -19,20 +23,23 @@
  * - no tickless
  */
 
-#define CYCLES_PER_SEC  CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC
+#define CYCLES_PER_SEC  sys_clock_hw_cycles_per_sec()
 #define CYCLES_PER_TICK (CYCLES_PER_SEC / CONFIG_SYS_CLOCK_TICKS_PER_SEC)
+#if defined(CONFIG_TEST)
+const int32_t z_sys_timer_irq_for_test = DT_IRQN(DT_ALIAS(system_lptmr));
+#endif
 
 /*
  * As a simplifying assumption, we only support a clock ticking at the
  * SIRC reset rate of 8MHz.
  */
-#if MHZ(8) != CYCLES_PER_SEC
+#if defined(CONFIG_TIMER_READS_ITS_FREQUENCY_AT_RUNTIME) || \
+    (MHZ(8) != CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC)
 #error "system timer misconfiguration; unsupported clock rate"
 #endif
 
 #define SYSTEM_TIMER_INSTANCE \
-	((LPTMR_Type *)(DT_OPENISA_RV32M1_LPTMR_SYSTEM_LPTMR_BASE_ADDRESS))
-#define SYSTEM_TIMER_IRQ_PRIO 0
+	((LPTMR_Type *)(DT_INST_REG_ADDR(0)))
 
 #define SIRC_RANGE_8MHZ      SCG_SIRCCFG_RANGE(1)
 #define SIRCDIV3_DIVIDE_BY_1 1
@@ -40,24 +47,36 @@
 
 struct device;	       /* forward declaration; type is not used. */
 
-static volatile u32_t cycle_count;
+static volatile uint32_t cycle_count;
 
-static void lptmr_irq_handler(struct device *unused)
+static void lptmr_irq_handler(const struct device *unused)
 {
 	ARG_UNUSED(unused);
 
 	SYSTEM_TIMER_INSTANCE->CSR |= LPTMR_CSR_TCF(1); /* Rearm timer. */
 	cycle_count += CYCLES_PER_TICK;          /* Track cycles. */
-	z_clock_announce(1);                     /* Poke the scheduler. */
+	sys_clock_announce(1);                     /* Poke the scheduler. */
 }
 
-int z_clock_driver_init(struct device *unused)
+uint32_t sys_clock_cycle_get_32(void)
 {
-	u32_t csr, psr, sircdiv; /* LPTMR registers */
+	return cycle_count + SYSTEM_TIMER_INSTANCE->CNR;
+}
 
-	ARG_UNUSED(unused);
-	IRQ_CONNECT(DT_OPENISA_RV32M1_LPTMR_SYSTEM_LPTMR_IRQ,
-		    SYSTEM_TIMER_IRQ_PRIO, lptmr_irq_handler, NULL, 0);
+/*
+ * Since we're not tickless, this is identically zero.
+ */
+uint32_t sys_clock_elapsed(void)
+{
+	return 0;
+}
+
+static int sys_clock_driver_init(void)
+{
+	uint32_t csr, psr, sircdiv; /* LPTMR registers */
+
+	IRQ_CONNECT(DT_INST_IRQN(0),
+		    0, lptmr_irq_handler, NULL, 0);
 
 	if ((SCG->SIRCCSR & SCG_SIRCCSR_SIRCEN_MASK) == SCG_SIRCCSR_SIRCEN(0)) {
 		/*
@@ -122,22 +141,12 @@ int z_clock_driver_init(struct device *unused)
 	 * Enable interrupts and the timer. There's no need to clear the
 	 * TFC bit in the csr variable, as it's already clear.
 	 */
-	irq_enable(DT_OPENISA_RV32M1_LPTMR_SYSTEM_LPTMR_IRQ);
+	irq_enable(DT_INST_IRQN(0));
 	csr = SYSTEM_TIMER_INSTANCE->CSR;
 	csr |= LPTMR_CSR_TEN(1);
 	SYSTEM_TIMER_INSTANCE->CSR = csr;
 	return 0;
 }
 
-u32_t z_timer_cycle_get_32(void)
-{
-	return cycle_count + SYSTEM_TIMER_INSTANCE->CNR;
-}
-
-/*
- * Since we're not tickless, this is identically zero.
- */
-u32_t z_clock_elapsed(void)
-{
-	return 0;
-}
+SYS_INIT(sys_clock_driver_init, PRE_KERNEL_2,
+	 CONFIG_SYSTEM_CLOCK_INIT_PRIORITY);

@@ -1,7 +1,7 @@
 .. _secure code:
 
-Secure Coding Guidelines
-########################
+Secure Coding
+#############
 
 Traditionally, microcontroller-based systems have not placed much
 emphasis on security.
@@ -15,7 +15,7 @@ uncontrolled access can be devastating [#attackf]_.
 
 This document describes the requirements and process for ensuring
 security is addressed within the Zephyr project.  All code submitted
-should comply with these guidelines.
+should comply with these principles.
 
 Much of this document comes from [CIIBPB]_.
 
@@ -26,7 +26,7 @@ This document covers guidelines for the `Zephyr Project`_, from a
 security perspective.  Many of the ideas contained herein are captured
 from other open source efforts.
 
-.. todo: Reference master document here
+.. todo: Reference main document here
 
 .. _Zephyr Project: https://www.zephyrproject.org/
 
@@ -49,8 +49,8 @@ project.
 Finally, the document covers how changes are to be made to this
 document.
 
-Secure Coding Guidelines
-************************
+Secure Coding
+*************
 
 Designing an open software system such as Zephyr to be secure requires
 adhering to a defined set of design standards. In [SALT75]_, the following,
@@ -206,12 +206,23 @@ injection, OS injection, classic buffer overflow, cross-site
 scripting, missing authentication, and missing authorization. See the
 `CWE/SANS top 25`_ or `OWASP Top 10`_ for commonly used lists.
 
+A free class from the nonprofit OpenSecurityTraining2 for C/C++ developers
+is available at `OST2_1001`_. It teaches how to prevent, detect, and
+mitigate linear stack/heap buffer overflows, non-linear out of bound writes,
+integer overflows, and other integer issues. The follow-on class, `OST2_1002`_,
+covers uninitialized data access, race conditions, use-after-free, type confusion,
+and information disclosure vulnerabilities.
+
 .. Turn this into something specific. Can we find examples of
-   mistakes.  Perhaps an example of things Coverity has sent us.
+   mistakes.  Perhaps an example of things static analysis tool has sent us.
 
 .. _CWE/SANS top 25: http://cwe.mitre.org/top25/
 
-.. _OWASP Top 10: https://www.owasp.org/index.php/Category:OWASP_Top_Ten_Project
+.. _OWASP Top 10: https://owasp.org/www-project-top-ten/
+
+.. _OST2_1001: https://ost2.fyi/Vulns1001
+
+.. _OST2_1002: https://ost2.fyi/Vulns1002
 
 Zephyr Security Subcommittee
 ============================
@@ -238,11 +249,11 @@ mainline code until the security issues have been addressed.
 Issues and Bug Tracking
 ***********************
 
-The Zephyr project shall have an issue tracking system (such as JIRA_)
+The Zephyr project shall have an issue tracking system (such as GitHub_)
 that can be used to record and track defects that are found in the
 system.
 
-.. _JIRA: https://www.atlassian.com/software/jira
+.. _GitHub: https://www.github.com
 
 Because security issues are often sensitive, this issue tracking
 system shall have a field to indicate a security issue.  Setting this

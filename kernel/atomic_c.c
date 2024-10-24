@@ -18,10 +18,11 @@
  * (originally from x86's atomic.c)
  */
 
-#include <atomic.h>
-#include <toolchain.h>
-#include <arch/cpu.h>
-#include <spinlock.h>
+#include <zephyr/toolchain.h>
+#include <zephyr/arch/cpu.h>
+#include <zephyr/spinlock.h>
+#include <zephyr/sys/atomic.h>
+#include <zephyr/kernel_structs.h>
 
 /* Single global spinlock for atomic operations.  This is fallback
  * code, not performance sensitive.  At least by not using irq_lock()
@@ -36,23 +37,26 @@ static struct k_spinlock lock;
  * forbidden.
  */
 #ifdef CONFIG_USERSPACE
-#include <syscall_handler.h>
+#include <zephyr/internal/syscall_handler.h>
 
 #define ATOMIC_SYSCALL_HANDLER_TARGET(name) \
-	Z_SYSCALL_HANDLER(name, target) { \
-		Z_OOPS(Z_SYSCALL_MEMORY_WRITE(target, sizeof(atomic_t))); \
+	static inline atomic_val_t z_vrfy_##name(atomic_t *target) \
+	{								\
+		K_OOPS(K_SYSCALL_MEMORY_WRITE(target, sizeof(atomic_t))); \
 		return z_impl_##name((atomic_t *)target); \
 	}
 
 #define ATOMIC_SYSCALL_HANDLER_TARGET_VALUE(name) \
-	Z_SYSCALL_HANDLER(name, target, value) { \
-		Z_OOPS(Z_SYSCALL_MEMORY_WRITE(target, sizeof(atomic_t))); \
+	static inline atomic_val_t z_vrfy_##name(atomic_t *target, \
+						 atomic_val_t value) \
+	{								\
+		K_OOPS(K_SYSCALL_MEMORY_WRITE(target, sizeof(atomic_t))); \
 		return z_impl_##name((atomic_t *)target, value); \
 	}
 #else
 #define ATOMIC_SYSCALL_HANDLER_TARGET(name)
 #define ATOMIC_SYSCALL_HANDLER_TARGET_VALUE(name)
-#endif
+#endif /* CONFIG_USERSPACE */
 
 /**
  *
@@ -60,10 +64,10 @@ static struct k_spinlock lock;
  *
  * This routine provides the compare-and-set operator. If the original value at
  * <target> equals <oldValue>, then <newValue> is stored at <target> and the
- * function returns 1.
+ * function returns true.
  *
  * If the original value at <target> does not equal <oldValue>, then the store
- * is not done and the function returns 0.
+ * is not done and the function returns false.
  *
  * The reading of the original value at <target>, the comparison,
  * and the write of the new value (if it occurs) all happen atomically with
@@ -72,19 +76,27 @@ static struct k_spinlock lock;
  * @param target address to be tested
  * @param old_value value to compare against
  * @param new_value value to compare against
- * @return Returns 1 if <new_value> is written, 0 otherwise.
+ * @return Returns true if <new_value> is written, false otherwise.
  */
-int z_impl_atomic_cas(atomic_t *target, atomic_val_t old_value,
-		      atomic_val_t new_value)
+bool z_impl_atomic_cas(atomic_t *target, atomic_val_t old_value,
+		       atomic_val_t new_value)
 {
 	k_spinlock_key_t key;
-	int ret = 0;
+	int ret = false;
+
+	/*
+	 * On SMP the k_spin_lock() definition calls atomic_cas().
+	 * Using k_spin_lock() here would create an infinite loop and
+	 * massive stack overflow. Consider CONFIG_ATOMIC_OPERATIONS_ARCH
+	 * or CONFIG_ATOMIC_OPERATIONS_BUILTIN instead.
+	 */
+	BUILD_ASSERT(!IS_ENABLED(CONFIG_SMP));
 
 	key = k_spin_lock(&lock);
 
 	if (*target == old_value) {
 		*target = new_value;
-		ret = 1;
+		ret = true;
 	}
 
 	k_spin_unlock(&lock, key);
@@ -93,12 +105,44 @@ int z_impl_atomic_cas(atomic_t *target, atomic_val_t old_value,
 }
 
 #ifdef CONFIG_USERSPACE
-Z_SYSCALL_HANDLER(atomic_cas, target, old_value, new_value)
+bool z_vrfy_atomic_cas(atomic_t *target, atomic_val_t old_value,
+		       atomic_val_t new_value)
 {
-	Z_OOPS(Z_SYSCALL_MEMORY_WRITE(target, sizeof(atomic_t)));
+	K_OOPS(K_SYSCALL_MEMORY_WRITE(target, sizeof(atomic_t)));
 
 	return z_impl_atomic_cas((atomic_t *)target, old_value, new_value);
 }
+#include <zephyr/syscalls/atomic_cas_mrsh.c>
+#endif /* CONFIG_USERSPACE */
+
+bool z_impl_atomic_ptr_cas(atomic_ptr_t *target, atomic_ptr_val_t old_value,
+			   atomic_ptr_val_t new_value)
+{
+	k_spinlock_key_t key;
+	int ret = false;
+
+	key = k_spin_lock(&lock);
+
+	if (*target == old_value) {
+		*target = new_value;
+		ret = true;
+	}
+
+	k_spin_unlock(&lock, key);
+
+	return ret;
+}
+
+#ifdef CONFIG_USERSPACE
+static inline bool z_vrfy_atomic_ptr_cas(atomic_ptr_t *target,
+					 atomic_ptr_val_t old_value,
+					 atomic_ptr_val_t new_value)
+{
+	K_OOPS(K_SYSCALL_MEMORY_WRITE(target, sizeof(atomic_ptr_t)));
+
+	return z_impl_atomic_ptr_cas(target, old_value, new_value);
+}
+#include <zephyr/syscalls/atomic_ptr_cas_mrsh.c>
 #endif /* CONFIG_USERSPACE */
 
 /**
@@ -178,6 +222,11 @@ atomic_val_t atomic_get(const atomic_t *target)
 	return *target;
 }
 
+atomic_ptr_val_t atomic_ptr_get(const atomic_ptr_t *target)
+{
+	return *target;
+}
+
 /**
  *
  * @brief Atomic get-and-set primitive
@@ -206,6 +255,33 @@ atomic_val_t z_impl_atomic_set(atomic_t *target, atomic_val_t value)
 }
 
 ATOMIC_SYSCALL_HANDLER_TARGET_VALUE(atomic_set);
+
+atomic_ptr_val_t z_impl_atomic_ptr_set(atomic_ptr_t *target,
+				       atomic_ptr_val_t value)
+{
+	k_spinlock_key_t key;
+	atomic_ptr_val_t ret;
+
+	key = k_spin_lock(&lock);
+
+	ret = *target;
+	*target = value;
+
+	k_spin_unlock(&lock, key);
+
+	return ret;
+}
+
+#ifdef CONFIG_USERSPACE
+static inline atomic_ptr_val_t z_vrfy_atomic_ptr_set(atomic_ptr_t *target,
+						     atomic_ptr_val_t value)
+{
+	K_OOPS(K_SYSCALL_MEMORY_WRITE(target, sizeof(atomic_ptr_t)));
+
+	return z_impl_atomic_ptr_set(target, value);
+}
+#include <zephyr/syscalls/atomic_ptr_set_mrsh.c>
+#endif /* CONFIG_USERSPACE */
 
 /**
  *
@@ -326,3 +402,13 @@ atomic_val_t z_impl_atomic_nand(atomic_t *target, atomic_val_t value)
 }
 
 ATOMIC_SYSCALL_HANDLER_TARGET_VALUE(atomic_nand);
+
+#ifdef CONFIG_USERSPACE
+#include <zephyr/syscalls/atomic_add_mrsh.c>
+#include <zephyr/syscalls/atomic_sub_mrsh.c>
+#include <zephyr/syscalls/atomic_set_mrsh.c>
+#include <zephyr/syscalls/atomic_or_mrsh.c>
+#include <zephyr/syscalls/atomic_xor_mrsh.c>
+#include <zephyr/syscalls/atomic_and_mrsh.c>
+#include <zephyr/syscalls/atomic_nand_mrsh.c>
+#endif /* CONFIG_USERSPACE */

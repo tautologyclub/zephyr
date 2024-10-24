@@ -11,20 +11,27 @@
  * This entropy source should only be used for testing.
  */
 
-#include "device.h"
-#include "entropy.h"
-#include "init.h"
-#include "misc/util.h"
+#define DT_DRV_COMPAT zephyr_native_posix_rng
+
+#include <zephyr/device.h>
+#include <zephyr/drivers/entropy.h>
+#include <zephyr/init.h>
+#include <zephyr/sys/util.h>
 #include <stdlib.h>
 #include <string.h>
-#include "posix_trace.h"
+#include <zephyr/arch/posix/posix_trace.h>
 #include "soc.h"
 #include "cmdline.h" /* native_posix command line options header */
+#include "nsi_host_trampolines.h"
+#include "fake_entropy_native_bottom.h"
 
 static unsigned int seed = 0x5678;
+static bool seed_random;
+static bool seed_set;
 
-static int entropy_native_posix_get_entropy(struct device *dev, u8_t *buffer,
-					    u16_t length)
+static int entropy_native_posix_get_entropy(const struct device *dev,
+					    uint8_t *buffer,
+					    uint16_t length)
 {
 	ARG_UNUSED(dev);
 
@@ -33,7 +40,7 @@ static int entropy_native_posix_get_entropy(struct device *dev, u8_t *buffer,
 		 * Note that only 1 thread (Zephyr thread or HW models), runs at
 		 * a time, therefore there is no need to use random_r()
 		 */
-		long int value = random();
+		long value = nsi_host_random();
 
 		size_t to_copy = MIN(length, sizeof(long int));
 
@@ -45,8 +52,9 @@ static int entropy_native_posix_get_entropy(struct device *dev, u8_t *buffer,
 	return 0;
 }
 
-static int entropy_native_posix_get_entropy_isr(struct device *dev, u8_t *buf,
-						u16_t len, u32_t flags)
+static int entropy_native_posix_get_entropy_isr(const struct device *dev,
+						uint8_t *buf,
+						uint16_t len, uint32_t flags)
 {
 	ARG_UNUSED(flags);
 
@@ -54,13 +62,18 @@ static int entropy_native_posix_get_entropy_isr(struct device *dev, u8_t *buf,
 	 * entropy_native_posix_get_entropy() is also safe for ISRs
 	 * and always produces data.
 	 */
-	return entropy_native_posix_get_entropy(dev, buf, len);
+	entropy_native_posix_get_entropy(dev, buf, len);
+
+	return len;
 }
 
-static int entropy_native_posix_init(struct device *dev)
+static int entropy_native_posix_init(const struct device *dev)
 {
 	ARG_UNUSED(dev);
-	srandom(seed);
+	if (seed_set || seed_random ||
+	    IS_ENABLED(CONFIG_FAKE_ENTROPY_NATIVE_POSIX_SEED_BY_DEFAULT)) {
+		entropy_native_seed(seed, seed_random);
+	}
 	posix_print_warning("WARNING: "
 			    "Using a test - not safe - entropy source\n");
 	return 0;
@@ -71,26 +84,39 @@ static const struct entropy_driver_api entropy_native_posix_api_funcs = {
 	.get_entropy_isr = entropy_native_posix_get_entropy_isr
 };
 
-DEVICE_AND_API_INIT(entropy_native_posix, CONFIG_ENTROPY_NAME,
-		    entropy_native_posix_init, NULL, NULL,
-		    PRE_KERNEL_1, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,
+DEVICE_DT_INST_DEFINE(0,
+		    entropy_native_posix_init, NULL,
+		    NULL, NULL,
+		    PRE_KERNEL_1, CONFIG_ENTROPY_INIT_PRIORITY,
 		    &entropy_native_posix_api_funcs);
+
+static void seed_was_set(char *argv, int offset)
+{
+	ARG_UNUSED(argv);
+	ARG_UNUSED(offset);
+	seed_set = true;
+}
 
 static void add_fake_entropy_option(void)
 {
 	static struct args_struct_t entropy_options[] = {
-		/*
-		 * Fields:
-		 * manual, mandatory, switch,
-		 * option_name, var_name ,type,
-		 * destination, callback,
-		 * description
-		 */
-		{false, false, false,
-		"seed", "r_seed", 'u',
-		(void *)&seed, NULL,
-		"A 32-bit integer seed value for the entropy device, such as "
-		"97229 (decimal), 0x17BCD (hex), or 0275715 (octal)"},
+		{
+			.option = "seed",
+			.name = "r_seed",
+			.type = 'u',
+			.dest = (void *)&seed,
+			.call_when_found = seed_was_set,
+			.descript = "A 32-bit integer seed value for the entropy device, such as "
+				    "97229 (decimal), 0x17BCD (hex), or 0275715 (octal)"
+		},
+		{
+			.is_switch = true,
+			.option = "seed-random",
+			.type = 'b',
+			.dest = (void *)&seed_random,
+			.descript = "Seed the random generator from /dev/urandom. "
+				    "Note your test may not be reproducible if you set this option"
+		},
 		ARG_TABLE_ENDMARKER
 	};
 

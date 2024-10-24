@@ -7,10 +7,13 @@
 #include "settings_test.h"
 #include "settings/settings_fcb.h"
 
-void test_config_save_fcb_unaligned(void)
+ZTEST(settings_config_fcb, test_config_save_fcb_unaligned)
 {
 	int rc;
 	struct settings_fcb cf;
+
+	rc = settings_register(&c_test_handlers[0]);
+	zassert_true(rc == 0 || rc == -EEXIST, "settings_register fail");
 
 	config_wipe_srcs();
 	config_wipe_fcb(fcb_sectors, ARRAY_SIZE(fcb_sectors));
@@ -22,8 +25,11 @@ void test_config_save_fcb_unaligned(void)
 	rc = settings_fcb_src(&cf);
 	zassert_true(rc == 0, "can't register FCB as configuration source");
 
-	/* override flash driver alignment */
-	cf.cf_fcb.f_align = 4;
+	if (cf.cf_fcb.f_align == 1) {
+		/* override flash driver alignment */
+		cf.cf_fcb.f_align = 4;
+	}
+
 	settings_mount_fcb_backend(&cf);
 
 	rc = settings_fcb_dst(&cf);
@@ -43,4 +49,5 @@ void test_config_save_fcb_unaligned(void)
 	val8_un = 15U;
 	rc = settings_save();
 	zassert_true(rc == 0, "fcb write error");
+	settings_unregister(&c_test_handlers[0]);
 }

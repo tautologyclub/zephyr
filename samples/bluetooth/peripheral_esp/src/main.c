@@ -11,17 +11,16 @@
 #include <stddef.h>
 #include <string.h>
 #include <errno.h>
-#include <misc/printk.h>
-#include <misc/byteorder.h>
-#include <zephyr.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/sys/byteorder.h>
+#include <zephyr/kernel.h>
 
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
-#include <bluetooth/conn.h>
-#include <bluetooth/uuid.h>
-#include <bluetooth/gatt.h>
-
-#include <gatt/bas.h>
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/hci.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/uuid.h>
+#include <zephyr/bluetooth/gatt.h>
+#include <zephyr/bluetooth/services/bas.h>
 
 #define SENSOR_1_NAME				"Temperature Sensor 1"
 #define SENSOR_2_NAME				"Temperature Sensor 2"
@@ -33,40 +32,72 @@
 #define SENSOR_3_UPDATE_IVAL			60
 
 /* ESS error definitions */
-#define ESS_ERR_WRITE_REJECT			0x80
-#define ESS_ERR_COND_NOT_SUPP			0x81
+#define ESS_ERR_WRITE_REJECT					0x80
+#define ESS_ERR_COND_NOT_SUPP					0x81
 
 /* ESS Trigger Setting conditions */
-#define ESS_TRIGGER_INACTIVE			0x00
-#define ESS_FIXED_TIME_INTERVAL			0x01
-#define ESS_NO_LESS_THAN_SPECIFIED_TIME		0x02
-#define ESS_VALUE_CHANGED			0x03
-#define ESS_LESS_THAN_REF_VALUE			0x04
-#define ESS_LESS_OR_EQUAL_TO_REF_VALUE		0x05
-#define ESS_GREATER_THAN_REF_VALUE		0x06
-#define ESS_GREATER_OR_EQUAL_TO_REF_VALUE	0x07
-#define ESS_EQUAL_TO_REF_VALUE			0x08
-#define ESS_NOT_EQUAL_TO_REF_VALUE		0x09
+#define ESS_TRIGGER_INACTIVE					0x00
+#define ESS_TRIGGER_FIXED_TIME_INTERVAL				0x01
+#define ESS_TRIGGER_NO_LESS_THAN_SPECIFIED_TIME			0x02
+#define ESS_TRIGGER_VALUE_CHANGED				0x03
+#define ESS_TRIGGER_LESS_THAN_REF_VALUE				0x04
+#define ESS_TRIGGER_LESS_OR_EQUAL_TO_REF_VALUE			0x05
+#define ESS_TRIGGER_GREATER_THAN_REF_VALUE			0x06
+#define ESS_TRIGGER_GREATER_OR_EQUAL_TO_REF_VALUE		0x07
+#define ESS_TRIGGER_EQUAL_TO_REF_VALUE				0x08
+#define ESS_TRIGGER_NOT_EQUAL_TO_REF_VALUE			0x09
 
-static inline void int_to_le24(u32_t value, u8_t *u24)
-{
-	u24[0] = value & 0xff;
-	u24[1] = (value >> 8) & 0xff;
-	u24[2] = (value >> 16) & 0xff;
-}
+/* ESS Measurement Descriptor – Sampling Functions */
+#define ESS_DESC_SAMPLING_UNSPECIFIED				0x00
+#define ESS_DESC_SAMPLING_INSTANTANEOUS				0x01
+#define ESS_DESC_SAMPLING_ARITHMETIC_MEAN			0x02
+#define ESS_DESC_SAMPLING_RMS					0x03
+#define ESS_DESC_SAMPLING_MAXIMUM				0x04
+#define ESS_DESC_SAMPLING_MINIMUM				0x05
+#define ESS_DESC_SAMPLING_ACCUMULATED				0x06
+#define ESS_DESC_SAMPLING_COUNT					0x07
 
-static inline u32_t le24_to_int(const u8_t *u24)
-{
-	return ((u32_t)u24[0] |
-		(u32_t)u24[1] << 8 |
-		(u32_t)u24[2] << 16);
-}
+/* ES Measurement Descriptor - Applications */
+#define ESS_DESC_APP_UNSPECIFIED				0x00
+#define ESS_DESC_APP_AIR					0x01
+#define ESS_DESC_APP_WATER					0x02
+#define ESS_DESC_APP_BAROMETRIC					0x03
+#define ESS_DESC_APP_SOIL					0x04
+#define ESS_DESC_APP_INFRARED					0x05
+#define ESS_DESC_APP_MAP_DATABASE				0x06
+#define ESS_DESC_APP_BAROMETRIC_ELEVATION_SOURCE		0x07
+#define ESS_DESC_APP_GPS_ONLY_ELEVATION_SOURCE			0x08
+#define ESS_DESC_APP_GPS_AND_MAP_DATABASE_ELEVATION_SOURCE	0x09
+#define ESS_DESC_APP_VERTICAL_DATUM_ELEVATION_SOURCE		0x0A
+#define ESS_DESC_APP_ONSHORE					0x0B
+#define ESS_DESC_APP_ONBOARD_VESSEL_OR_VEHICLE			0x0C
+#define ESS_DESC_APP_FRONT					0x0D
+#define ESS_DESC_APP_BACK_REAR					0x0E
+#define ESS_DESC_APP_UPPER					0x0F
+#define ESS_DESC_APP_LOWER					0x10
+#define ESS_DESC_APP_PRIMARY					0x11
+#define ESS_DESC_APP_SECONDARY					0x12
+#define ESS_DESC_APP_OUTDOOR					0x13
+#define ESS_DESC_APP_INDOOR					0x14
+#define ESS_DESC_APP_TOP					0x15
+#define ESS_DESC_APP_BOTTOM					0x16
+#define ESS_DESC_APP_MAIN					0x17
+#define ESS_DESC_APP_BACKUP					0x18
+#define ESS_DESC_APP_AUXILIARY					0x19
+#define ESS_DESC_APP_SUPPLEMENTARY				0x1A
+#define ESS_DESC_APP_INSIDE					0x1B
+#define ESS_DESC_APP_OUTSIDE					0x1C
+#define ESS_DESC_APP_LEFT					0x1D
+#define ESS_DESC_APP_RIGHT					0x1E
+#define ESS_DESC_APP_INTERNAL					0x1F
+#define ESS_DESC_APP_EXTERNAL					0x20
+#define ESS_DESC_APP_SOLAR					0x21
 
 static ssize_t read_u16(struct bt_conn *conn, const struct bt_gatt_attr *attr,
-			void *buf, u16_t len, u16_t offset)
+			void *buf, uint16_t len, uint16_t offset)
 {
-	const u16_t *u16 = attr->user_data;
-	u16_t value = sys_cpu_to_le16(*u16);
+	const uint16_t *u16 = attr->user_data;
+	uint16_t value = sys_cpu_to_le16(*u16);
 
 	return bt_gatt_attr_read(conn, attr, buf, len, offset, &value,
 				 sizeof(value));
@@ -75,34 +106,33 @@ static ssize_t read_u16(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 /* Environmental Sensing Service Declaration */
 
 struct es_measurement {
-	u16_t flags; /* Reserved for Future Use */
-	u8_t sampling_func;
-	u32_t meas_period;
-	u32_t update_interval;
-	u8_t application;
-	u8_t meas_uncertainty;
+	uint16_t flags; /* Reserved for Future Use */
+	uint8_t sampling_func;
+	uint32_t meas_period;
+	uint32_t update_interval;
+	uint8_t application;
+	uint8_t meas_uncertainty;
 };
 
 struct temperature_sensor {
-	s16_t temp_value;
+	int16_t temp_value;
 
 	/* Valid Range */
-	s16_t lower_limit;
-	s16_t upper_limit;
+	int16_t lower_limit;
+	int16_t upper_limit;
 
 	/* ES trigger setting - Value Notification condition */
-	u8_t condition;
+	uint8_t condition;
 	union {
-		u32_t seconds;
-		s16_t ref_val; /* Reference temperature */
+		uint32_t seconds;
+		int16_t ref_val; /* Reference temperature */
 	};
 
-	struct bt_gatt_ccc_cfg  ccc_cfg[BT_GATT_CCC_MAX];
 	struct es_measurement meas;
 };
 
 struct humidity_sensor {
-	s16_t humid_value;
+	int16_t humid_value;
 
 	struct es_measurement meas;
 };
@@ -112,11 +142,11 @@ static struct temperature_sensor sensor_1 = {
 		.temp_value = 1200,
 		.lower_limit = -10000,
 		.upper_limit = 10000,
-		.condition = ESS_VALUE_CHANGED,
-		.meas.sampling_func = 0x00,
+		.condition = ESS_TRIGGER_VALUE_CHANGED,
+		.meas.sampling_func = ESS_DESC_SAMPLING_UNSPECIFIED,
 		.meas.meas_period = 0x01,
 		.meas.update_interval = SENSOR_1_UPDATE_IVAL,
-		.meas.application = 0x1c,
+		.meas.application = ESS_DESC_APP_OUTSIDE,
 		.meas.meas_uncertainty = 0x04,
 };
 
@@ -124,49 +154,49 @@ static struct temperature_sensor sensor_2 = {
 		.temp_value = 1800,
 		.lower_limit = -1000,
 		.upper_limit = 5000,
-		.condition = ESS_VALUE_CHANGED,
-		.meas.sampling_func = 0x00,
+		.condition = ESS_TRIGGER_VALUE_CHANGED,
+		.meas.sampling_func = ESS_DESC_SAMPLING_UNSPECIFIED,
 		.meas.meas_period = 0x01,
 		.meas.update_interval = SENSOR_2_UPDATE_IVAL,
-		.meas.application = 0x1b,
+		.meas.application = ESS_DESC_APP_INSIDE,
 		.meas.meas_uncertainty = 0x04,
 };
 
 static struct humidity_sensor sensor_3 = {
 		.humid_value = 6233,
-		.meas.sampling_func = 0x02,
+		.meas.sampling_func = ESS_DESC_SAMPLING_ARITHMETIC_MEAN,
 		.meas.meas_period = 0x0e10,
 		.meas.update_interval = SENSOR_3_UPDATE_IVAL,
-		.meas.application = 0x1c,
+		.meas.application = ESS_DESC_APP_OUTSIDE,
 		.meas.meas_uncertainty = 0x01,
 };
 
 static void temp_ccc_cfg_changed(const struct bt_gatt_attr *attr,
-				 u16_t value)
+				 uint16_t value)
 {
 	simulate_temp = value == BT_GATT_CCC_NOTIFY;
 }
 
 struct read_es_measurement_rp {
-	u16_t flags; /* Reserved for Future Use */
-	u8_t sampling_function;
-	u8_t measurement_period[3];
-	u8_t update_interval[3];
-	u8_t application;
-	u8_t measurement_uncertainty;
+	uint16_t flags; /* Reserved for Future Use */
+	uint8_t sampling_function;
+	uint8_t measurement_period[3];
+	uint8_t update_interval[3];
+	uint8_t application;
+	uint8_t measurement_uncertainty;
 } __packed;
 
 static ssize_t read_es_measurement(struct bt_conn *conn,
 				   const struct bt_gatt_attr *attr, void *buf,
-				   u16_t len, u16_t offset)
+				   uint16_t len, uint16_t offset)
 {
 	const struct es_measurement *value = attr->user_data;
 	struct read_es_measurement_rp rsp;
 
 	rsp.flags = sys_cpu_to_le16(value->flags);
 	rsp.sampling_function = value->sampling_func;
-	int_to_le24(value->meas_period, rsp.measurement_period);
-	int_to_le24(value->update_interval, rsp.update_interval);
+	sys_put_le24(value->meas_period, rsp.measurement_period);
+	sys_put_le24(value->update_interval, rsp.update_interval);
 	rsp.application = value->application;
 	rsp.measurement_uncertainty = value->meas_uncertainty;
 
@@ -176,10 +206,10 @@ static ssize_t read_es_measurement(struct bt_conn *conn,
 
 static ssize_t read_temp_valid_range(struct bt_conn *conn,
 				     const struct bt_gatt_attr *attr, void *buf,
-				     u16_t len, u16_t offset)
+				     uint16_t len, uint16_t offset)
 {
 	const struct temperature_sensor *sensor = attr->user_data;
-	u16_t tmp[] = {sys_cpu_to_le16(sensor->lower_limit),
+	uint16_t tmp[] = {sys_cpu_to_le16(sensor->lower_limit),
 			  sys_cpu_to_le16(sensor->upper_limit)};
 
 	return bt_gatt_attr_read(conn, attr, buf, len, offset, tmp,
@@ -187,38 +217,38 @@ static ssize_t read_temp_valid_range(struct bt_conn *conn,
 }
 
 struct es_trigger_setting_seconds {
-	u8_t condition;
-	u8_t sec[3];
+	uint8_t condition;
+	uint8_t sec[3];
 } __packed;
 
 struct es_trigger_setting_reference {
-	u8_t condition;
-	s16_t ref_val;
+	uint8_t condition;
+	int16_t ref_val;
 } __packed;
 
 static ssize_t read_temp_trigger_setting(struct bt_conn *conn,
 					 const struct bt_gatt_attr *attr,
-					 void *buf, u16_t len,
-					 u16_t offset)
+					 void *buf, uint16_t len,
+					 uint16_t offset)
 {
 	const struct temperature_sensor *sensor = attr->user_data;
 
 	switch (sensor->condition) {
 	/* Operand N/A */
 	case ESS_TRIGGER_INACTIVE:
-		/* fallthrough */
-	case ESS_VALUE_CHANGED:
+		__fallthrough;
+	case ESS_TRIGGER_VALUE_CHANGED:
 		return bt_gatt_attr_read(conn, attr, buf, len, offset,
 					 &sensor->condition,
 					 sizeof(sensor->condition));
 	/* Seconds */
-	case ESS_FIXED_TIME_INTERVAL:
-		/* fallthrough */
-	case ESS_NO_LESS_THAN_SPECIFIED_TIME: {
+	case ESS_TRIGGER_FIXED_TIME_INTERVAL:
+		__fallthrough;
+	case ESS_TRIGGER_NO_LESS_THAN_SPECIFIED_TIME: {
 			struct es_trigger_setting_seconds rp;
 
 			rp.condition = sensor->condition;
-			int_to_le24(sensor->seconds, rp.sec);
+			sys_put_le24(sensor->seconds, rp.sec);
 
 			return bt_gatt_attr_read(conn, attr, buf, len, offset,
 						 &rp, sizeof(rp));
@@ -236,29 +266,29 @@ static ssize_t read_temp_trigger_setting(struct bt_conn *conn,
 	}
 }
 
-static bool check_condition(u8_t condition, s16_t old_val, s16_t new_val,
-			    s16_t ref_val)
+static bool check_condition(uint8_t condition, int16_t old_val, int16_t new_val,
+			    int16_t ref_val)
 {
 	switch (condition) {
 	case ESS_TRIGGER_INACTIVE:
 		return false;
-	case ESS_FIXED_TIME_INTERVAL:
-	case ESS_NO_LESS_THAN_SPECIFIED_TIME:
+	case ESS_TRIGGER_FIXED_TIME_INTERVAL:
+	case ESS_TRIGGER_NO_LESS_THAN_SPECIFIED_TIME:
 		/* TODO: Check time requirements */
 		return false;
-	case ESS_VALUE_CHANGED:
+	case ESS_TRIGGER_VALUE_CHANGED:
 		return new_val != old_val;
-	case ESS_LESS_THAN_REF_VALUE:
+	case ESS_TRIGGER_LESS_THAN_REF_VALUE:
 		return new_val < ref_val;
-	case ESS_LESS_OR_EQUAL_TO_REF_VALUE:
+	case ESS_TRIGGER_LESS_OR_EQUAL_TO_REF_VALUE:
 		return new_val <= ref_val;
-	case ESS_GREATER_THAN_REF_VALUE:
+	case ESS_TRIGGER_GREATER_THAN_REF_VALUE:
 		return new_val > ref_val;
-	case ESS_GREATER_OR_EQUAL_TO_REF_VALUE:
+	case ESS_TRIGGER_GREATER_OR_EQUAL_TO_REF_VALUE:
 		return new_val >= ref_val;
-	case ESS_EQUAL_TO_REF_VALUE:
+	case ESS_TRIGGER_EQUAL_TO_REF_VALUE:
 		return new_val == ref_val;
-	case ESS_NOT_EQUAL_TO_REF_VALUE:
+	case ESS_TRIGGER_NOT_EQUAL_TO_REF_VALUE:
 		return new_val != ref_val;
 	default:
 		return false;
@@ -266,7 +296,7 @@ static bool check_condition(u8_t condition, s16_t old_val, s16_t new_val,
 }
 
 static void update_temperature(struct bt_conn *conn,
-			       const struct bt_gatt_attr *chrc, s16_t value,
+			       const struct bt_gatt_attr *chrc, int16_t value,
 			       struct temperature_sensor *sensor)
 {
 	bool notify = check_condition(sensor->condition,
@@ -284,7 +314,7 @@ static void update_temperature(struct bt_conn *conn,
 	}
 }
 
-static struct bt_gatt_attr ess_attrs[] = {
+BT_GATT_SERVICE_DEFINE(ess_svc,
 	BT_GATT_PRIMARY_SERVICE(BT_UUID_ESS),
 
 	/* Temperature Sensor 1 */
@@ -300,7 +330,8 @@ static struct bt_gatt_attr ess_attrs[] = {
 	BT_GATT_DESCRIPTOR(BT_UUID_ES_TRIGGER_SETTING,
 			   BT_GATT_PERM_READ, read_temp_trigger_setting,
 			   NULL, &sensor_1),
-	BT_GATT_CCC(sensor_1.ccc_cfg, temp_ccc_cfg_changed),
+	BT_GATT_CCC(temp_ccc_cfg_changed,
+		    BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 
 	/* Temperature Sensor 2 */
 	BT_GATT_CHARACTERISTIC(BT_UUID_TEMPERATURE,
@@ -315,7 +346,8 @@ static struct bt_gatt_attr ess_attrs[] = {
 	BT_GATT_DESCRIPTOR(BT_UUID_ES_TRIGGER_SETTING,
 			   BT_GATT_PERM_READ, read_temp_trigger_setting,
 			   NULL, &sensor_2),
-	BT_GATT_CCC(sensor_2.ccc_cfg, temp_ccc_cfg_changed),
+	BT_GATT_CCC(temp_ccc_cfg_changed,
+		    BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 
 	/* Humidity Sensor */
 	BT_GATT_CHARACTERISTIC(BT_UUID_HUMIDITY, BT_GATT_CHRC_READ,
@@ -324,23 +356,21 @@ static struct bt_gatt_attr ess_attrs[] = {
 	BT_GATT_CUD(SENSOR_3_NAME, BT_GATT_PERM_READ),
 	BT_GATT_DESCRIPTOR(BT_UUID_ES_MEASUREMENT, BT_GATT_PERM_READ,
 			   read_es_measurement, NULL, &sensor_3.meas),
-};
-
-static struct bt_gatt_service ess_svc = BT_GATT_SERVICE(ess_attrs);
+);
 
 static void ess_simulate(void)
 {
-	static u8_t i;
-	u16_t val;
+	static uint8_t i;
+	uint16_t val;
 
 	if (!(i % SENSOR_1_UPDATE_IVAL)) {
 		val = 1200 + i;
-		update_temperature(NULL, &ess_attrs[2], val, &sensor_1);
+		update_temperature(NULL, &ess_svc.attrs[2], val, &sensor_1);
 	}
 
 	if (!(i % SENSOR_2_UPDATE_IVAL)) {
 		val = 1800 + i;
-		update_temperature(NULL, &ess_attrs[9], val, &sensor_2);
+		update_temperature(NULL, &ess_svc.attrs[9], val, &sensor_2);
 	}
 
 	if (!(i % SENSOR_3_UPDATE_IVAL)) {
@@ -357,42 +387,41 @@ static void ess_simulate(void)
 static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
 	BT_DATA_BYTES(BT_DATA_GAP_APPEARANCE, 0x00, 0x03),
-	BT_DATA_BYTES(BT_DATA_UUID16_ALL, 0x1a, 0x18),
-	/* TODO: Include Service Data AD */
+	BT_DATA_BYTES(BT_DATA_UUID16_ALL,
+		      BT_UUID_16_ENCODE(BT_UUID_ESS_VAL),
+		      BT_UUID_16_ENCODE(BT_UUID_BAS_VAL)),
 };
 
-static void connected(struct bt_conn *conn, u8_t err)
+static const struct bt_data sd[] = {
+	BT_DATA(BT_DATA_NAME_COMPLETE, CONFIG_BT_DEVICE_NAME, sizeof(CONFIG_BT_DEVICE_NAME) - 1),
+};
+
+static void connected(struct bt_conn *conn, uint8_t err)
 {
 	if (err) {
-		printk("Connection failed (err %u)\n", err);
+		printk("Connection failed, err 0x%02x %s\n", err, bt_hci_err_to_str(err));
 	} else {
 		printk("Connected\n");
 	}
 }
 
-static void disconnected(struct bt_conn *conn, u8_t reason)
+static void disconnected(struct bt_conn *conn, uint8_t reason)
 {
-	printk("Disconnected (reason %u)\n", reason);
+	printk("Disconnected, reason 0x%02x %s\n", reason, bt_hci_err_to_str(reason));
 }
 
-static struct bt_conn_cb conn_callbacks = {
+BT_CONN_CB_DEFINE(conn_callbacks) = {
 	.connected = connected,
 	.disconnected = disconnected,
 };
 
-static void bt_ready(int err)
+static void bt_ready(void)
 {
-	if (err) {
-		printk("Bluetooth init failed (err %d)\n", err);
-		return;
-	}
+	int err;
 
 	printk("Bluetooth initialized\n");
 
-	bt_gatt_service_register(&ess_svc);
-	bas_init();
-
-	err = bt_le_adv_start(BT_LE_ADV_CONN_NAME, ad, ARRAY_SIZE(ad), NULL, 0);
+	err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_1, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
 	if (err) {
 		printk("Advertising failed to start (err %d)\n", err);
 		return;
@@ -425,21 +454,35 @@ static struct bt_conn_auth_cb auth_cb_display = {
 	.cancel = auth_cancel,
 };
 
-void main(void)
+static void bas_notify(void)
+{
+	uint8_t battery_level = bt_bas_get_battery_level();
+
+	battery_level--;
+
+	if (!battery_level) {
+		battery_level = 100U;
+	}
+
+	bt_bas_set_battery_level(battery_level);
+}
+
+int main(void)
 {
 	int err;
 
-	err = bt_enable(bt_ready);
+	err = bt_enable(NULL);
 	if (err) {
 		printk("Bluetooth init failed (err %d)\n", err);
-		return;
+		return 0;
 	}
 
-	bt_conn_cb_register(&conn_callbacks);
+	bt_ready();
+
 	bt_conn_auth_cb_register(&auth_cb_display);
 
 	while (1) {
-		k_sleep(MSEC_PER_SEC);
+		k_sleep(K_SECONDS(1));
 
 		/* Temperature simulation */
 		if (simulate_temp) {
@@ -449,4 +492,5 @@ void main(void)
 		/* Battery level simulation */
 		bas_notify();
 	}
+	return 0;
 }

@@ -1,48 +1,39 @@
-#
 # Copyright (c) 2018, Linaro Limited
-#
 # SPDX-License-Identifier: Apache-2.0
-#
----
-title: STM32 GPIO
-version: 0.1
 
-description: >
-    This is a representation of the STM32 GPIO nodes
+description: STM32 GPIO node
+
+compatible: "st,stm32-gpio"
+
+include:
+  - name: gpio-controller.yaml
+    property-blocklist:
+      - ngpios
+  - name: base.yaml
 
 properties:
-    compatible:
-      type: string
-      category: required
-      description: compatible strings
-      constraint: "st,stm32-gpio"
-      generation: define
+  reg:
+    required: true
 
-    reg:
-      type: int
-      description: mmio register space
-      generation: define
-      category: required
+  clocks:
+    required: true
 
-    interrupts:
-      type: compound
-      category: required
-      description: required interrupts
-      generation: define
+  "#gpio-cells":
+    const: 2
 
-    label:
-      type: string
-      category: required
-      description: Human readable string describing the device (used by Zephyr for API name)
-      generation: define
+  ngpios:
+    type: int
+    default: 16
+    description: |
+        This property indicates the number of in-use slots of available slots
+        for GPIOs. The STM32 GPIO controller typically has all 16 possible port
+        IO with few exceptions. It should only be necessary to explicitly set
+        this property if the controller itself does not implement all 16 port
+        IO register bits; for example PORTE in the STM32WB55xx series which only
+        implements the first 5. Package restrictions on the number of exposed
+        GPIO should not influence this property. For cases in which there might
+        be holes in the slot range, this value should be the max slot number+1.
 
-    clocks:
-      type: array
-      category: required
-      description: Clock gate control information
-      generation: define
-
-"#cells":
+gpio-cells:
   - pin
   - flags
-...

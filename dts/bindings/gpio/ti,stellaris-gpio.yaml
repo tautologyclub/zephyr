@@ -1,38 +1,21 @@
----
 # SPDX-License-Identifier: Apache-2.0
-title: TI Stellaris GPIO
-version: 0.1
 
-description: >
-    This is a representation of the TI Stellaris GPIO node
+description: TI Stellaris GPIO node
+
+compatible: "ti,stellaris-gpio"
+
+include: [gpio-controller.yaml, base.yaml]
 
 properties:
-    compatible:
-      type: string
-      category: required
-      description: compatible strings
-      constraint: "ti,stellaris-gpio"
-      generation: define
+  reg:
+    required: true
 
-    reg:
-      type: int
-      description: mmio register space
-      generation: define
-      category: required
+  interrupts:
+    required: true
 
-    label:
-      type: string
-      category: required
-      description: Human readable string describing the device (used by Zephyr for API name)
-      generation: define
+  "#gpio-cells":
+    const: 2
 
-    interrupts:
-      type: compound
-      category: required
-      description: required interrupts
-      generation: define
-
-"#cells":
+gpio-cells:
   - pin
   - flags
-...

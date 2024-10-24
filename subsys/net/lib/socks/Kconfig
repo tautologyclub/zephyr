@@ -1,13 +1,8 @@
-#
 # Copyright (c) 2018 Antmicro Ltd
-#
 # SPDX-License-Identifier: Apache-2.0
-#
 
 menuconfig SOCKS
 	bool "SOCKS5 proxy"
-	select NET_SOCKETS
-	select NET_SOCKETS_POSIX_NAMES
 	help
 	  Enable SOCKS5 proxy support
 

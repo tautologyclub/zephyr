@@ -1,26 +1,12 @@
----
-title: TI Stellaris UART
-version: 0.1
+description: TI Stellaris UART
 
-description: >
-    This binding gives a base representation of the TI Stellaris UART
+compatible: "ti,stellaris-uart"
 
-inherits:
-    !include uart.yaml
+include: uart-controller.yaml
 
 properties:
-    compatible:
-      constraint: "ti,stellaris-uart"
+  reg:
+    required: true
 
-    reg:
-      type: array
-      description: mmio register space
-      generation: define
-      category: required
-
-    interrupts:
-      type: array
-      category: required
-      description: required interrupts
-      generation: define
-...
+  interrupts:
+    required: true

@@ -1,7 +1,8 @@
 common:
   depends_on: netif
-  platform_whitelist: native_posix qemu_x86 qemu_cortex_m3
 tests:
   net.offload:
     min_ram: 16
-    tags: net checksum_offload
+    tags:
+      - net
+      - checksum_offload

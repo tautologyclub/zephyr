@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <ztest.h>
+#include <zephyr/ztest.h>
 #include "test_sched.h"
 
 /* nrf 51 has lower ram, so creating less number of threads */
@@ -16,15 +16,15 @@
 #else
 	#define NUM_THREAD 10
 #endif
-#define ITRERATION_COUNT 5
+#define ITERATION_COUNT 5
 #define BASE_PRIORITY 1
 
 BUILD_ASSERT(NUM_THREAD <= MAX_NUM_THREAD);
 
-/* Semaphore on which Ztest thread wait*/
+/* Semaphore on which Ztest thread wait */
 static K_SEM_DEFINE(sema2, 0, NUM_THREAD);
 
-/* Semaphore on which application threads wait*/
+/* Semaphore on which application threads wait */
 static K_SEM_DEFINE(sema3, 0, NUM_THREAD);
 
 static int thread_idx;
@@ -33,29 +33,30 @@ static struct k_thread t[NUM_THREAD];
 /* Application thread */
 static void thread_tslice(void *p1, void *p2, void *p3)
 {
+	int idx = POINTER_TO_INT(p1);
+
 	/* Print New line for last thread */
-	int thread_parameter = ((int)p1 == (NUM_THREAD - 1)) ? '\n' :
-			       ((int)p1 + 'A');
+	int thread_parameter = (idx == (NUM_THREAD - 1)) ? '\n' :
+			       (idx + 'A');
 
 	while (1) {
-		/* Prining alphabet corresponding to thread*/
+		/* Printing alphabet corresponding to thread */
 		TC_PRINT("%c", thread_parameter);
-		/* Testing if threads are execueted as per priority*/
-		zassert_true(((int)p1 == thread_idx), NULL);
+		/* Testing if threads are executed as per priority */
+		zassert_true((idx == thread_idx));
 		thread_idx = (thread_idx + 1) % (NUM_THREAD);
 
-		/* Realease CPU and give chance to Ztest thread to run*/
+		/* Release CPU and give chance to Ztest thread to run */
 		k_sem_give(&sema2);
-		/*Wait for relase of semaphore from Ztest thread*/
+		/* Wait for release of semaphore from Ztest thread */
 		k_sem_take(&sema3, K_FOREVER);
 	}
 
 }
 
-/*test cases*/
+/* test cases */
 
 /**
- *
  * @brief Check the behavior of preemptive threads with different priorities
  *
  * @details Create multiple threads of different priorities - all are preemptive,
@@ -64,31 +65,32 @@ static void thread_tslice(void *p1, void *p2, void *p3)
  *
  * @ingroup kernel_sched_tests
  */
-void test_priority_scheduling(void)
+ZTEST(threads_scheduling, test_priority_scheduling)
 {
 	k_tid_t tid[NUM_THREAD];
 	int old_prio = k_thread_priority_get(k_current_get());
 	int count = 0;
 
-	/* update priority for current thread*/
+	/* update priority for current thread */
 	k_thread_priority_set(k_current_get(),
 			      K_PRIO_PREEMPT(BASE_PRIORITY - 1));
 
-	/* Create Threads with different Priority*/
+	/* Create Threads with different Priority */
 	for (int i = 0; i < NUM_THREAD; i++) {
 		tid[i] = k_thread_create(&t[i], tstacks[i], STACK_SIZE,
-					 thread_tslice, (void *)(intptr_t) i, NULL, NULL,
-					 K_PRIO_PREEMPT(BASE_PRIORITY + i), 0, 0);
+					 thread_tslice, INT_TO_POINTER(i), NULL, NULL,
+					 K_PRIO_PREEMPT(BASE_PRIORITY + i), 0,
+					 K_NO_WAIT);
 	}
 
-	while (count < ITRERATION_COUNT) {
+	while (count < ITERATION_COUNT) {
 
 		/* Wait for each thread to complete */
 		for (int i = 0; i < NUM_THREAD; i++) {
 			k_sem_take(&sema2, K_FOREVER);
 		}
 		/* Delay to give chance to last thread to run */
-		k_sleep(1);
+		k_sleep(K_MSEC(1));
 
 		/* Giving Chance to other threads to run */
 		for (int i = 0; i < NUM_THREAD; i++) {
@@ -98,7 +100,7 @@ void test_priority_scheduling(void)
 	}
 
 
-	/* test case teardown*/
+	/* test case teardown */
 	for (int i = 0; i < NUM_THREAD; i++) {
 		k_thread_abort(tid[i]);
 	}

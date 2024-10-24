@@ -4,10 +4,10 @@
  */
 
 /*
- * Control arrives here at _start from the reset vector or from crt0-app.S.
+ * Control arrives here at _start from the reset vector.
  */
 
-#include <xtensa_rtos.h>
+#include <xtensa/coreasm.h>
 
 /* Exports */
 .global _start
@@ -22,7 +22,7 @@
  */
 
 .global __start
-.type	z_cstart, @function
+.type	z_prep_c, @function
 
 
 /* Macros to abstract away ABI differences */
@@ -52,7 +52,7 @@ _start:
 	/*
 	 *  _start is typically NOT at the beginning of the text segment --
 	 *  it is always called from either the reset vector (__start) or other
-	 *  code that does equivalent initialization (such as crt0-app.S).
+	 *  code that does equivalent initialization.
 	 *
 	 *  Assumptions on entry to _start:
 	 *	- low (level-one) and medium priority interrupts are disabled
@@ -92,11 +92,21 @@ _start:
 	 */
 #if XCHAL_HAVE_EXCEPTIONS
 # ifdef __XTENSA_CALL0_ABI__
-	/* PS.WOE = 0, PS.UM = 1, PS.EXCM = 0, PS.INTLEVEL = 15 */
-	movi	a3, PS_UM|PS_INTLEVEL(15)
+	/*
+	 * PS.WOE = 0
+	 * PS.UM = 1
+	 * PS.EXCM = 0
+	 * PS.INTLEVEL = XCHAL_EXCM_LEVEL
+	 */
+	movi	a3, PS_UM|PS_INTLEVEL(XCHAL_EXCM_LEVEL)
 # else
-	/* PS.WOE = 1, PS.UM = 1, PS.EXCM = 0, PS.INTLEVEL = 15 */
-	movi	a3, PS_UM|PS_WOE|PS_INTLEVEL(15)
+	/*
+	 * PS.WOE = 1
+	 * PS.UM = 1
+	 * PS.EXCM = 0
+	 * PS.INTLEVEL = XCHAL_EXCM_LEVEL
+	 */
+	movi	a3, PS_UM|PS_WOE|PS_INTLEVEL(XCHAL_EXCM_LEVEL)
 # endif
 	wsr	a3, PS
 	rsync
@@ -136,6 +146,7 @@ _start:
 	/* Clear a0 again as possible CALLX to __memmap_init changed it. */
 	movi	a0, 0
 # endif
+
 	/*
 	 *  Clear the BSS (uninitialized data) segments.
 	 *  This code supports multiple zeroed sections (*.bss).
@@ -178,7 +189,6 @@ _start:
 #endif /* !XCHAL_HAVE_BOOTLOADER */
 
 	/* Enter C domain, never returns from here */
-	CALL	z_cstart
+	CALL	z_prep_c
 
 	.size	_start, . - _start
-

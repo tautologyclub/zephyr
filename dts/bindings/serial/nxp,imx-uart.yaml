@@ -1,56 +1,26 @@
-#
-# Copyright (c) 2017, NXP
-#
+# Copyright 2017, 2024 NXP
 # SPDX-License-Identifier: Apache-2.0
-#
----
-title: iMX Uart
-version: 0.1
 
-description: >
-    This binding gives a base representation of the iMX UART
+description: iMX UART
 
-inherits:
-    !include uart.yaml
+compatible: "nxp,imx-uart"
+
+include: [uart-controller.yaml, pinctrl-device.yaml, "nxp,rdc-policy.yaml"]
 
 properties:
-    compatible:
-      constraint: "nxp,imx-uart"
+  reg:
+    required: true
 
-    reg:
-      type: array
-      description: mmio register space
-      generation: define
-      category: required
+  interrupts:
+    required: true
 
-    interrupts:
-      type: array
-      category: required
-      description: required interrupts
-      generation: define
+  modem-mode:
+    type: int
+    required: true
+    description: Set the UART Port to modem mode 0 (dce) 64 (dte)
 
-    pinctrl-\d+:
-      type: array
-      category: optional
-      description: pinmux information for RX, TX, CTS, RTS
-      generation: define
+  pinctrl-0:
+    required: true
 
-    clocks:
-      type: array
-      category: required
-      description: Clock gate information
-      generation: define
-
-    modem-mode:
-     type: int
-     category: required
-     description: Set the UART Port to modem mode 0 (dce) 64 (dte)
-     generation: define
-
-    rdc:
-     type: int
-     category: required
-     description: Set the RDC permission for this peripheral
-     generation: define
-
-...
+  pinctrl-names:
+    required: true

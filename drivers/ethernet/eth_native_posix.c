@@ -14,27 +14,31 @@
 #define LOG_MODULE_NAME eth_posix
 #define LOG_LEVEL CONFIG_ETHERNET_LOG_LEVEL
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 
 #include <stdio.h>
 
-#include <kernel.h>
+#include <zephyr/kernel.h>
 #include <stdbool.h>
 #include <errno.h>
 #include <stddef.h>
+#include <cmdline.h>
+#include <posix_native_task.h>
 
-#include <net/net_pkt.h>
-#include <net/net_core.h>
-#include <net/net_if.h>
-#include <net/ethernet.h>
+#include <zephyr/net/net_pkt.h>
+#include <zephyr/net/net_core.h>
+#include <zephyr/net/net_if.h>
+#include <zephyr/net/ethernet.h>
 #include <ethernet/eth_stats.h>
 
-#include <ptp_clock.h>
-#include <net/gptp.h>
-#include <net/lldp.h>
+#include <zephyr/drivers/ptp_clock.h>
+#include <zephyr/net/gptp.h>
+#include <zephyr/net/lldp.h>
 
 #include "eth_native_posix_priv.h"
+#include "nsi_host_trampolines.h"
+#include "eth.h"
 
 #define NET_BUF_TIMEOUT K_MSEC(100)
 
@@ -45,12 +49,15 @@ LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 #endif
 
 struct eth_context {
-	u8_t recv[NET_ETH_MTU + ETH_HDR_LEN];
-	u8_t send[NET_ETH_MTU + ETH_HDR_LEN];
-	u8_t mac_addr[6];
+	uint8_t recv[NET_ETH_MTU + ETH_HDR_LEN];
+	uint8_t send[NET_ETH_MTU + ETH_HDR_LEN];
+	uint8_t mac_addr[6];
 	struct net_linkaddr ll_addr;
 	struct net_if *iface;
 	const char *if_name;
+	k_tid_t rx_thread;
+	struct z_thread_stack_element *rx_stack;
+	size_t rx_stack_size;
 	int dev_fd;
 	bool init_done;
 	bool status;
@@ -60,17 +67,18 @@ struct eth_context {
 	struct net_stats_eth stats;
 #endif
 #if defined(CONFIG_ETH_NATIVE_POSIX_PTP_CLOCK)
-	struct device *ptp_clock;
+	const struct device *ptp_clock;
 #endif
 };
 
-NET_STACK_DEFINE(RX_ZETH, eth_rx_stack,
-		 CONFIG_ARCH_POSIX_RECOMMENDED_STACK_SIZE,
-		 CONFIG_ARCH_POSIX_RECOMMENDED_STACK_SIZE);
-static struct k_thread rx_thread_data;
+static const char *if_name_cmd_opt;
 
-/* TODO: support multiple interfaces */
-static struct eth_context eth_context_data;
+#define DEFINE_RX_THREAD(x, _)						\
+	K_KERNEL_STACK_DEFINE(rx_thread_stack_##x,			\
+			      CONFIG_ARCH_POSIX_RECOMMENDED_STACK_SIZE);\
+	static struct k_thread rx_thread_data_##x
+
+LISTIFY(CONFIG_ETH_NATIVE_POSIX_INTERFACE_COUNT, DEFINE_RX_THREAD, (;), _);
 
 #if defined(CONFIG_NET_GPTP)
 static bool need_timestamping(struct gptp_hdr *hdr)
@@ -88,33 +96,17 @@ static struct gptp_hdr *check_gptp_msg(struct net_if *iface,
 				       struct net_pkt *pkt,
 				       bool is_tx)
 {
-	u8_t *msg_start = net_pkt_data(pkt);
+	uint8_t *msg_start = net_pkt_data(pkt);
 	struct gptp_hdr *gptp_hdr;
 	int eth_hlen;
+	struct net_eth_hdr *hdr;
 
-#if defined(CONFIG_NET_VLAN)
-	if (net_eth_get_vlan_status(iface)) {
-		struct net_eth_vlan_hdr *hdr_vlan;
-
-		hdr_vlan = (struct net_eth_vlan_hdr *)msg_start;
-		if (ntohs(hdr_vlan->type) != NET_ETH_PTYPE_PTP) {
-			return NULL;
-		}
-
-		eth_hlen = sizeof(struct net_eth_vlan_hdr);
-	} else
-#endif
-	{
-		struct net_eth_hdr *hdr;
-
-		hdr = (struct net_eth_hdr *)msg_start;
-		if (ntohs(hdr->type) != NET_ETH_PTYPE_PTP) {
-			return NULL;
-		}
-
-
-		eth_hlen = sizeof(struct net_eth_hdr);
+	hdr = (struct net_eth_hdr *)msg_start;
+	if (ntohs(hdr->type) != NET_ETH_PTYPE_PTP) {
+		return NULL;
 	}
+
+	eth_hlen = sizeof(struct net_eth_hdr);
 
 	/* In TX, the first net_buf contains the Ethernet header
 	 * and the actual gPTP header is in the second net_buf.
@@ -150,7 +142,7 @@ static void update_gptp(struct net_if *iface, struct net_pkt *pkt,
 	struct gptp_hdr *hdr;
 	int ret;
 
-	ret = eth_clock_gettime(&timestamp);
+	ret = eth_clock_gettime(&timestamp.second, &timestamp.nanosecond);
 	if (ret < 0) {
 		return;
 	}
@@ -175,9 +167,9 @@ static void update_gptp(struct net_if *iface, struct net_pkt *pkt,
 #define update_gptp(iface, pkt, send)
 #endif /* CONFIG_NET_GPTP */
 
-static int eth_send(struct device *dev, struct net_pkt *pkt)
+static int eth_send(const struct device *dev, struct net_pkt *pkt)
 {
-	struct eth_context *ctx = dev->driver_data;
+	struct eth_context *ctx = dev->data;
 	int count = net_pkt_get_len(pkt);
 	int ret;
 
@@ -190,18 +182,12 @@ static int eth_send(struct device *dev, struct net_pkt *pkt)
 
 	LOG_DBG("Send pkt %p len %d", pkt, count);
 
-	ret = eth_write_data(ctx->dev_fd, ctx->send, count);
+	ret = nsi_host_write(ctx->dev_fd, ctx->send, count);
 	if (ret < 0) {
 		LOG_DBG("Cannot send pkt %p (%d)", pkt, ret);
 	}
 
 	return ret < 0 ? ret : 0;
-}
-
-static int eth_init(struct device *dev)
-{
-	ARG_UNUSED(dev);
-	return 0;
 }
 
 static struct net_linkaddr *eth_get_mac(struct eth_context *ctx)
@@ -212,73 +198,47 @@ static struct net_linkaddr *eth_get_mac(struct eth_context *ctx)
 	return &ctx->ll_addr;
 }
 
-static inline struct net_if *get_iface(struct eth_context *ctx,
-				       u16_t vlan_tag)
+static struct net_pkt *prepare_pkt(struct eth_context *ctx,
+				   int count, int *status)
 {
-#if defined(CONFIG_NET_VLAN)
-	struct net_if *iface;
-
-	iface = net_eth_get_vlan_iface(ctx->iface, vlan_tag);
-	if (!iface) {
-		return ctx->iface;
-	}
-
-	return iface;
-#else
-	ARG_UNUSED(vlan_tag);
-
-	return ctx->iface;
-#endif
-}
-
-static int read_data(struct eth_context *ctx, int fd)
-{
-	u16_t vlan_tag = NET_VLAN_TAG_UNSPEC;
-	struct net_if *iface;
 	struct net_pkt *pkt;
-	int count;
-
-	count = eth_read_data(fd, ctx->recv, sizeof(ctx->recv));
-	if (count <= 0) {
-		return 0;
-	}
 
 	pkt = net_pkt_rx_alloc_with_buffer(ctx->iface, count,
 					   AF_UNSPEC, 0, NET_BUF_TIMEOUT);
 	if (!pkt) {
-		return -ENOMEM;
+		*status = -ENOMEM;
+		return NULL;
 	}
 
 	if (net_pkt_write(pkt, ctx->recv, count)) {
-		return -ENOBUFS;
+		net_pkt_unref(pkt);
+		*status = -ENOBUFS;
+		return NULL;
 	}
 
-#if defined(CONFIG_NET_VLAN)
-	{
-		struct net_eth_hdr *hdr = NET_ETH_HDR(pkt);
-
-		if (ntohs(hdr->type) == NET_ETH_PTYPE_VLAN) {
-			struct net_eth_vlan_hdr *hdr_vlan =
-				(struct net_eth_vlan_hdr *)NET_ETH_HDR(pkt);
-
-			net_pkt_set_vlan_tci(pkt, ntohs(hdr_vlan->vlan.tci));
-			vlan_tag = net_pkt_vlan_tag(pkt);
-		}
-
-#if CONFIG_NET_TC_RX_COUNT > 1
-		{
-			enum net_priority prio;
-
-			prio = net_vlan2priority(net_pkt_vlan_priority(pkt));
-			net_pkt_set_priority(pkt, prio);
-		}
-#endif
-	}
-#endif
-
-	iface = get_iface(ctx, vlan_tag);
+	*status = 0;
 
 	LOG_DBG("Recv pkt %p len %d", pkt, count);
+
+	return pkt;
+}
+
+static int read_data(struct eth_context *ctx, int fd)
+{
+	struct net_if *iface = ctx->iface;
+	struct net_pkt *pkt = NULL;
+	int status;
+	int count;
+
+	count = nsi_host_read(fd, ctx->recv, sizeof(ctx->recv));
+	if (count <= 0) {
+		return 0;
+	}
+
+	pkt = prepare_pkt(ctx, count, &status);
+	if (!pkt) {
+		return status;
+	}
 
 	update_gptp(iface, pkt, false);
 
@@ -289,38 +249,53 @@ static int read_data(struct eth_context *ctx, int fd)
 	return 0;
 }
 
-static void eth_rx(struct eth_context *ctx)
+static void eth_rx(void *p1, void *p2, void *p3)
 {
-	int ret;
+	ARG_UNUSED(p2);
+	ARG_UNUSED(p3);
 
+	struct eth_context *ctx = p1;
 	LOG_DBG("Starting ZETH RX thread");
 
 	while (1) {
 		if (net_if_is_up(ctx->iface)) {
-			ret = eth_wait_data(ctx->dev_fd);
-			if (!ret) {
+			while (!eth_wait_data(ctx->dev_fd)) {
 				read_data(ctx, ctx->dev_fd);
-			} else {
-				eth_stats_update_errors_rx(ctx->iface);
+				k_yield();
 			}
 		}
 
-		k_sleep(K_MSEC(50));
+		k_sleep(K_MSEC(CONFIG_ETH_NATIVE_POSIX_RX_TIMEOUT));
 	}
 }
 
+#if defined(CONFIG_THREAD_MAX_NAME_LEN)
+#define THREAD_MAX_NAME_LEN CONFIG_THREAD_MAX_NAME_LEN
+#else
+#define THREAD_MAX_NAME_LEN 1
+#endif
+
 static void create_rx_handler(struct eth_context *ctx)
 {
-	k_thread_create(&rx_thread_data, eth_rx_stack,
-			K_THREAD_STACK_SIZEOF(eth_rx_stack),
-			(k_thread_entry_t)eth_rx,
+	k_thread_create(ctx->rx_thread,
+			ctx->rx_stack,
+			ctx->rx_stack_size,
+			eth_rx,
 			ctx, NULL, NULL, K_PRIO_COOP(14),
 			0, K_NO_WAIT);
+
+	if (IS_ENABLED(CONFIG_THREAD_NAME)) {
+		char name[THREAD_MAX_NAME_LEN];
+
+		snprintk(name, sizeof(name), "eth_native_posix_rx-%s",
+			 ctx->if_name);
+		k_thread_name_set(ctx->rx_thread, name);
+	}
 }
 
 static void eth_iface_init(struct net_if *iface)
 {
-	struct eth_context *ctx = net_if_get_device(iface)->driver_data;
+	struct eth_context *ctx = net_if_get_device(iface)->data;
 	struct net_linkaddr *ll_addr = eth_get_mac(ctx);
 
 	ctx->iface = iface;
@@ -337,12 +312,10 @@ static void eth_iface_init(struct net_if *iface)
 
 #if defined(CONFIG_ETH_NATIVE_POSIX_RANDOM_MAC)
 	/* 00-00-5E-00-53-xx Documentation RFC 7042 */
-	ctx->mac_addr[0] = 0x00;
-	ctx->mac_addr[1] = 0x00;
-	ctx->mac_addr[2] = 0x5E;
+	gen_random_mac(ctx->mac_addr, 0x00, 0x00, 0x5E);
+
 	ctx->mac_addr[3] = 0x00;
 	ctx->mac_addr[4] = 0x53;
-	ctx->mac_addr[5] = sys_rand32_get();
 
 	/* The TUN/TAP setup script will by default set the MAC address of host
 	 * interface to 00:00:5E:00:53:FF so do not allow that.
@@ -351,6 +324,12 @@ static void eth_iface_init(struct net_if *iface)
 		ctx->mac_addr[5] = 0x01;
 	}
 #else
+	/* Difficult to configure MAC addresses any sane way if we have more
+	 * than one network interface.
+	 */
+	BUILD_ASSERT(CONFIG_ETH_NATIVE_POSIX_INTERFACE_COUNT == 1,
+		     "Cannot have static MAC if interface count > 1");
+
 	if (CONFIG_ETH_NATIVE_POSIX_MAC_ADDR[0] != 0) {
 		if (net_bytes_from_str(ctx->mac_addr, sizeof(ctx->mac_addr),
 				       CONFIG_ETH_NATIVE_POSIX_MAC_ADDR) < 0) {
@@ -360,30 +339,45 @@ static void eth_iface_init(struct net_if *iface)
 	}
 #endif
 
+	/* If we have only one network interface, then use the name
+	 * defined in the Kconfig directly. This way there is no need to
+	 * change the documentation etc. and break things.
+	 */
+	if (CONFIG_ETH_NATIVE_POSIX_INTERFACE_COUNT == 1) {
+		ctx->if_name = CONFIG_ETH_NATIVE_POSIX_DRV_NAME;
+	}
+
+	if (if_name_cmd_opt != NULL) {
+		ctx->if_name = if_name_cmd_opt;
+	}
+
+	LOG_DBG("Interface %p using \"%s\"", iface, ctx->if_name);
+
 	net_if_set_link_addr(iface, ll_addr->addr, ll_addr->len,
 			     NET_LINK_ETHERNET);
 
-	ctx->if_name = ETH_NATIVE_POSIX_DRV_NAME;
-
-	ctx->dev_fd = eth_iface_create(ctx->if_name, false);
+	ctx->dev_fd = eth_iface_create(CONFIG_ETH_NATIVE_POSIX_DEV_NAME, ctx->if_name, false);
 	if (ctx->dev_fd < 0) {
-		LOG_ERR("Cannot create %s (%d)", ctx->if_name, ctx->dev_fd);
+		LOG_ERR("Cannot create %s (%d/%s)", ctx->if_name, ctx->dev_fd,
+			strerror(-ctx->dev_fd));
 	} else {
 		/* Create a thread that will handle incoming data from host */
 		create_rx_handler(ctx);
-
-		eth_setup_host(ctx->if_name);
-
-		eth_start_script(ctx->if_name);
 	}
 }
 
 static
-enum ethernet_hw_caps eth_posix_native_get_capabilities(struct device *dev)
+enum ethernet_hw_caps eth_posix_native_get_capabilities(const struct device *dev)
 {
 	ARG_UNUSED(dev);
 
-	return ETHERNET_HW_VLAN
+	return ETHERNET_TXTIME
+#if defined(CONFIG_NET_VLAN)
+		| ETHERNET_HW_VLAN
+#endif
+#if defined(CONFIG_ETH_NATIVE_POSIX_VLAN_TAG_STRIP)
+		| ETHERNET_HW_VLAN_TAG_STRIP
+#endif
 #if defined(CONFIG_ETH_NATIVE_POSIX_PTP_CLOCK)
 		| ETHERNET_PTP
 #endif
@@ -397,24 +391,24 @@ enum ethernet_hw_caps eth_posix_native_get_capabilities(struct device *dev)
 }
 
 #if defined(CONFIG_ETH_NATIVE_POSIX_PTP_CLOCK)
-static struct device *eth_get_ptp_clock(struct device *dev)
+static const struct device *eth_get_ptp_clock(const struct device *dev)
 {
-	struct eth_context *context = dev->driver_data;
+	struct eth_context *context = dev->data;
 
 	return context->ptp_clock;
 }
 #endif
 
 #if defined(CONFIG_NET_STATISTICS_ETHERNET)
-static struct net_stats_eth *get_stats(struct device *dev)
+static struct net_stats_eth *get_stats(const struct device *dev)
 {
-	struct eth_context *context = dev->driver_data;
+	struct eth_context *context = dev->data;
 
 	return &(context->stats);
 }
 #endif
 
-static int set_config(struct device *dev,
+static int set_config(const struct device *dev,
 		      enum ethernet_config_type type,
 		      const struct ethernet_config *config)
 {
@@ -422,7 +416,7 @@ static int set_config(struct device *dev,
 
 	if (IS_ENABLED(CONFIG_NET_PROMISCUOUS_MODE) &&
 	    type == ETHERNET_CONFIG_TYPE_PROMISC_MODE) {
-		struct eth_context *context = dev->driver_data;
+		struct eth_context *context = dev->data;
 
 		if (config->promisc_mode) {
 			if (context->promisc_mode) {
@@ -440,14 +434,19 @@ static int set_config(struct device *dev,
 
 		ret = eth_promisc_mode(context->if_name,
 				       context->promisc_mode);
+	} else if (type == ETHERNET_CONFIG_TYPE_MAC_ADDRESS) {
+		struct eth_context *context = dev->data;
+
+		memcpy(context->mac_addr, config->mac_address.addr,
+		       sizeof(context->mac_addr));
 	}
 
 	return ret;
 }
 
 #if defined(CONFIG_NET_VLAN)
-static int vlan_setup(struct device *dev, struct net_if *iface,
-		      u16_t tag, bool enable)
+static int vlan_setup(const struct device *dev, struct net_if *iface,
+		      uint16_t tag, bool enable)
 {
 	if (enable) {
 		net_lldp_set_lldpdu(iface);
@@ -459,36 +458,11 @@ static int vlan_setup(struct device *dev, struct net_if *iface,
 }
 #endif /* CONFIG_NET_VLAN */
 
-static int eth_start_device(struct device *dev)
-{
-	struct eth_context *context = dev->driver_data;
-	int ret;
-
-	context->status = true;
-
-	ret = eth_if_up(context->if_name);
-
-	eth_setup_host(context->if_name);
-
-	return ret;
-}
-
-static int eth_stop_device(struct device *dev)
-{
-	struct eth_context *context = dev->driver_data;
-
-	context->status = false;
-
-	return eth_if_down(context->if_name);
-}
-
 static const struct ethernet_api eth_if_api = {
 	.iface_api.init = eth_iface_init,
 
 	.get_capabilities = eth_posix_native_get_capabilities,
 	.set_config = set_config,
-	.start = eth_start_device,
-	.stop = eth_stop_device,
 	.send = eth_send,
 
 #if defined(CONFIG_NET_VLAN)
@@ -502,20 +476,44 @@ static const struct ethernet_api eth_if_api = {
 #endif
 };
 
-ETH_NET_DEVICE_INIT(eth_native_posix, ETH_NATIVE_POSIX_DRV_NAME,
-		    eth_init, &eth_context_data, NULL,
-		    CONFIG_KERNEL_INIT_PRIORITY_DEFAULT, &eth_if_api,
-		    NET_ETH_MTU);
+#define DEFINE_ETH_DEV_DATA(x, _)					     \
+	static struct eth_context eth_context_data_##x = {		     \
+		.if_name = CONFIG_ETH_NATIVE_POSIX_DRV_NAME #x,		     \
+		.rx_thread = &rx_thread_data_##x,			     \
+		.rx_stack = rx_thread_stack_##x,			     \
+		.rx_stack_size = K_KERNEL_STACK_SIZEOF(rx_thread_stack_##x), \
+	}
+
+LISTIFY(CONFIG_ETH_NATIVE_POSIX_INTERFACE_COUNT, DEFINE_ETH_DEV_DATA, (;), _);
+
+#define DEFINE_ETH_DEVICE(x, _)						\
+	ETH_NET_DEVICE_INIT(eth_native_posix_##x,			\
+			    CONFIG_ETH_NATIVE_POSIX_DRV_NAME #x,	\
+			    NULL, NULL,	&eth_context_data_##x, NULL,	\
+			    CONFIG_KERNEL_INIT_PRIORITY_DEFAULT,	\
+			    &eth_if_api,				\
+			    NET_ETH_MTU)
+
+LISTIFY(CONFIG_ETH_NATIVE_POSIX_INTERFACE_COUNT, DEFINE_ETH_DEVICE, (;), _);
 
 #if defined(CONFIG_ETH_NATIVE_POSIX_PTP_CLOCK)
+
+#if defined(CONFIG_NET_GPTP)
+BUILD_ASSERT(								\
+	CONFIG_ETH_NATIVE_POSIX_INTERFACE_COUNT == CONFIG_NET_GPTP_NUM_PORTS, \
+	"Number of network interfaces must match gPTP port count");
+#endif
+
 struct ptp_context {
 	struct eth_context *eth_context;
 };
 
-static struct ptp_context ptp_0_context;
+#define DEFINE_PTP_DEV_DATA(x, _) \
+	static struct ptp_context ptp_context_##x
 
+LISTIFY(CONFIG_ETH_NATIVE_POSIX_INTERFACE_COUNT, DEFINE_PTP_DEV_DATA, (;), _);
 
-static int ptp_clock_set_native_posix(struct device *clk,
+static int ptp_clock_set_native_posix(const struct device *clk,
 				      struct net_ptp_time *tm)
 {
 	ARG_UNUSED(clk);
@@ -528,15 +526,15 @@ static int ptp_clock_set_native_posix(struct device *clk,
 	return 0;
 }
 
-static int ptp_clock_get_native_posix(struct device *clk,
+static int ptp_clock_get_native_posix(const struct device *clk,
 				      struct net_ptp_time *tm)
 {
 	ARG_UNUSED(clk);
 
-	return eth_clock_gettime(tm);
+	return eth_clock_gettime(&tm->second, &tm->nanosecond);
 }
 
-static int ptp_clock_adjust_native_posix(struct device *clk,
+static int ptp_clock_adjust_native_posix(const struct device *clk,
 					 int increment)
 {
 	ARG_UNUSED(clk);
@@ -549,8 +547,8 @@ static int ptp_clock_adjust_native_posix(struct device *clk,
 	return 0;
 }
 
-static int ptp_clock_rate_adjust_native_posix(struct device *clk,
-					      float ratio)
+static int ptp_clock_rate_adjust_native_posix(const struct device *clk,
+					      double ratio)
 {
 	ARG_UNUSED(clk);
 	ARG_UNUSED(ratio);
@@ -569,20 +567,51 @@ static const struct ptp_clock_driver_api api = {
 	.rate_adjust = ptp_clock_rate_adjust_native_posix,
 };
 
-static int ptp_init(struct device *port)
-{
-	struct device *eth_dev = DEVICE_GET(eth_native_posix);
-	struct eth_context *context = eth_dev->driver_data;
-	struct ptp_context *ptp_context = port->driver_data;
+#define PTP_INIT_FUNC(x, _)						\
+	static int ptp_init_##x(const struct device *port)			\
+	{								\
+		const struct device *const eth_dev = DEVICE_GET(eth_native_posix_##x); \
+		struct eth_context *context = eth_dev->data;	\
+		struct ptp_context *ptp_context = port->data;	\
+									\
+		context->ptp_clock = port;				\
+		ptp_context->eth_context = context;			\
+									\
+		return 0;						\
+	}
 
-	context->ptp_clock = port;
-	ptp_context->eth_context = context;
+LISTIFY(CONFIG_ETH_NATIVE_POSIX_INTERFACE_COUNT, PTP_INIT_FUNC, (), _)
 
-	return 0;
-}
+#define DEFINE_PTP_DEVICE(x, _)						\
+	DEVICE_DEFINE(eth_native_posix_ptp_clock_##x,			\
+			    PTP_CLOCK_NAME "_" #x,			\
+			    ptp_init_##x,				\
+			    NULL,					\
+			    &ptp_context_##x,				\
+			    NULL,					\
+			    POST_KERNEL,				\
+			    CONFIG_KERNEL_INIT_PRIORITY_DEFAULT,	\
+			    &api)
 
-DEVICE_AND_API_INIT(eth_native_posix_ptp_clock_0, PTP_CLOCK_NAME,
-		    ptp_init, &ptp_0_context, NULL, POST_KERNEL,
-		    CONFIG_KERNEL_INIT_PRIORITY_DEFAULT, &api);
+LISTIFY(CONFIG_ETH_NATIVE_POSIX_INTERFACE_COUNT, DEFINE_PTP_DEVICE, (;), _);
 
 #endif /* CONFIG_ETH_NATIVE_POSIX_PTP_CLOCK */
+
+static void add_native_posix_options(void)
+{
+	static struct args_struct_t eth_native_posix_options[] = {
+		{
+			.is_mandatory = false,
+			.option = "eth-if",
+			.name = "name",
+			.type = 's',
+			.dest = (void *)&if_name_cmd_opt,
+			.descript = "Name of the eth interface to use",
+		},
+		ARG_TABLE_ENDMARKER,
+	};
+
+	native_add_command_line_opts(eth_native_posix_options);
+}
+
+NATIVE_TASK(add_native_posix_options, PRE_BOOT_1, 10);

@@ -1,7 +1,8 @@
-.. _sockets-dumb-http-server-sample:
+.. zephyr:code-sample:: socket-dumb-http-server
+   :name: Dumb HTTP server
+   :relevant-api: bsd_sockets net_pkt
 
-Socket Dumb HTTP Server
-#######################
+   Implement a simple, portable, HTTP server using BSD sockets.
 
 Overview
 ********
@@ -37,12 +38,6 @@ Build the Zephyr version of the sockets/echo application like this:
    :goals: build
    :compact:
 
-``board_to_use`` defaults to ``qemu_x86``. In this case, you can run the
-application in QEMU using ``make run``. If you used another BOARD, you
-will need to consult its documentation for application deployment
-instructions. You can read about Zephyr support for specific boards in
-the documentation at :ref:`boards`.
-
 After the sample starts, it expects connections at 192.0.2.1, port 8080.
 The easiest way to connect is by opening a following URL in a web
 browser: http://192.0.2.1:8080/ . You should see a page with a sample
@@ -55,7 +50,7 @@ Alternatively, a tool like ``curl`` can be used:
     $ curl http://192.0.2.1:8080/
 
 Finally, you can run an HTTP profiling/load tool like Apache Bench
-(``ab``) against the server:
+(``ab``) against the server::
 
     $ ab -n10 http://192.0.2.1:8080/
 
@@ -69,11 +64,11 @@ The same application source code can be built for a POSIX system, e.g.
 Linux. (Note: if you look at the source, you will see that the code is
 the same except the header files are different for Zephyr vs POSIX.)
 
-To build for a host POSIX OS:
+To build:
 
 .. code-block:: console
 
-    $ make -f Makefile.posix
+    $ make -f Makefile.host
 
 To run:
 

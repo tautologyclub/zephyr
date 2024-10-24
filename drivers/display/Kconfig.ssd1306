@@ -1,14 +1,16 @@
-# Kconfig - SSD1306 display controller configuration options
+# SSD1306 display controller configuration options
 
-#
 # Copyright (c) 2018 Phytec Messtechnik GmbH
-#
 # SPDX-License-Identifier: Apache-2.0
-#
 
 menuconfig SSD1306
 	bool "SSD1306 display driver"
-	depends on I2C
+	default y
+	depends on DT_HAS_SOLOMON_SSD1306FB_ENABLED || DT_HAS_SINOWEALTH_SH1106_ENABLED
+	select I2C if $(dt_compat_on_bus,$(DT_COMPAT_SOLOMON_SSD1306FB),i2c)
+	select SPI if $(dt_compat_on_bus,$(DT_COMPAT_SOLOMON_SSD1306FB),spi)
+	select I2C if $(dt_compat_on_bus,$(DT_COMPAT_SINOWEALTH_SH1106),i2c)
+	select SPI if $(dt_compat_on_bus,$(DT_COMPAT_SINOWEALTH_SH1106),spi)
 	help
 	  Enable driver for SSD1306 display driver.
 
@@ -17,22 +19,8 @@ if SSD1306
 config SSD1306_DEFAULT_CONTRAST
 	int "SSD1306 default contrast"
 	default 128
-	range 0 255
+	range 0 $(UINT8_MAX)
 	help
-	  SSD1673 default contrast.
+	  SSD1306 default contrast.
 
-choice
-	prompt "Display controller type"
-	default SSD1306_DEFAULT
-	help
-	  Specify the type of the controller.
-
-config SSD1306_DEFAULT
-	bool "Default SSD1306 controller"
-
-config SSD1306_SH1106_COMPATIBLE
-	bool "Enable SH1106 compatible mode"
-
-endchoice
-
-endif #SSD1306
+endif # SSD1306

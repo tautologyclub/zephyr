@@ -1,4 +1,5 @@
 tests:
   kernel.memory_slabs:
-    tags: kernel
-    min_ram: 16
+    tags:
+      - kernel
+      - memory_slabs

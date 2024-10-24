@@ -1,4 +1,10 @@
 tests:
-  system.settings.fcb:
-    platform_whitelist: nrf52840_pca10056 nrf52_pca10040
-    tags: settings_intialization_fcb
+  settings.fcb:
+    platform_allow:
+      - nrf52840dk/nrf52840
+      - nrf52dk/nrf52832
+    integration_platforms:
+      - nrf52840dk/nrf52840
+    tags:
+      - settings
+      - fcb

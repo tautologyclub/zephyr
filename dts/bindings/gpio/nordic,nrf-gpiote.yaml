@@ -1,39 +1,29 @@
-#
 # Copyright (c) 2018, marc-cpdesign
-#
 # SPDX-License-Identifier: Apache-2.0
-#
----
-title: NRF5 GPIOTE
-version: 0.1
 
-description: >
-    This is a representation of the NRF GPIOTE node
+description: NRF5 GPIOTE node
+
+compatible: "nordic,nrf-gpiote"
+
+include:
+  - base.yaml
+  - nordic,split-channels.yaml
 
 properties:
-    compatible:
-      type: string
-      category: required
-      description: compatible strings
-      constraint: "nordic,nrf-gpiote"
-      generation: define
+  reg:
+    required: true
 
-    reg:
-      type: int
-      description: mmio register space
-      generation: define
-      category: required
+  interrupts:
+    required: true
 
-    interrupts:
-      type: compound
-      category: required
-      description: required interrupts
-      generation: define
+  instance:
+    type: int
+    required: true
+    description: |
+      The GPIOTE instance number. GPIOTE instance GPIOTE0 has:
 
-    label:
-      type: string
-      category: required
-      description: Human readable string describing the device (used by Zephyr for API name)
-      generation: define
+        instance = <0>;
 
-...
+      And GPIOTE1 has:
+
+        instance = <1>;

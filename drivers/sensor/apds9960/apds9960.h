@@ -8,7 +8,7 @@
 #ifndef ZEPHYR_DRIVERS_SENSOR_APDS9960_APDS9960_H_
 #define ZEPHYR_DRIVERS_SENSOR_APDS9960_APDS9960_H_
 
-#include <gpio.h>
+#include <zephyr/drivers/gpio.h>
 
 #define APDS9960_ENABLE_REG		0x80
 #define APDS9960_ENABLE_GEN		BIT(6)
@@ -36,9 +36,10 @@
 #define APDS9960_CONFIG1_WLONG		BIT(1)
 
 #define APDS9960_PPULSE_REG		0x8E
-#define APDS9960_PPULSE_PLEN		(BIT(7) | BIT(6))
-#define APDS9960_PPULSE_PULSE		(BIT(5) | BIT(4) | BIT(3) |\
-					BIT(2) | BIT(1) | BIT(0))
+#define APDS9960_PPULSE_LENGTH_4US	0
+#define APDS9960_PPULSE_LENGTH_8US	BIT(6)
+#define APDS9960_PPULSE_LENGTH_16US	BIT(7)
+#define APDS9960_PPULSE_LENGTH_32US	(BIT(7) | BIT(6))
 
 #define APDS9960_CONTROL_REG		0x8F
 #define APDS9960_CONTROL_LDRIVE		(BIT(6) | BIT(7))
@@ -63,12 +64,11 @@
 #define APDS9960_CONFIG2_REG		0x90
 #define APDS9960_CONFIG2_CPSIEN		BIT(6)
 #define APDS9960_CONFIG2_PSIEN		BIT(7)
-#define APDS9960_CONFIG2_LEDBOOST	(BIT(5) | BIT(4))
 /* LED Boost values */
-#define APDS9960_GLED_BOOST_100		0
-#define APDS9960_GLED_BOOST_150		BIT(4)
-#define APDS9960_GLED_BOOST_200		BIT(5)
-#define APDS9960_GLED_BOOST_300		(BIT(5) | BIT(4))
+#define APDS9960_PLED_BOOST_100		0
+#define APDS9960_PLED_BOOST_150		BIT(4)
+#define APDS9960_PLED_BOOST_200		BIT(5)
+#define APDS9960_PLED_BOOST_300		(BIT(5) | BIT(4))
 
 #define APDS9960_ID_REG			0x92
 /* Acceptable device IDs */
@@ -181,15 +181,12 @@
 #define APDS9960_DEFAULT_ATIME		219
 #define APDS9960_DEFAULT_WTIME		255
 #define APDS9960_DEFAULT_CONFIG1	0x60
-#define APDS9960_DEFAULT_AGAIN		APDS9960_AGAIN_4X
 #define APDS9960_DEFAULT_PERS		BIT(4)
 #define APDS9960_DEFAULT_CONFIG2	(BIT(6) | BIT(0))
-#define APDS9960_DEFAULT_PROX_PPULSE	0x87
 #define APDS9960_DEFAULT_GESTURE_PPULSE	0x89
 #define APDS9960_DEFAULT_POFFSET_UR	0
 #define APDS9960_DEFAULT_POFFSET_DL	0
 #define APDS9960_DEFAULT_LDRIVE		APDS9960_LED_DRIVE_100MA
-#define APDS9960_DEFAULT_PGAIN		APDS9960_PGAIN_4X
 
 #ifdef CONFIG_APDS9960_TRIGGER
 #define APDS9960_DEFAULT_PILT		0
@@ -216,39 +213,48 @@
 #define APDS9960_DEFAULT_GCONF3		0
 
 struct apds9960_config {
-	char *i2c_name;
-	char *gpio_name;
-	u8_t gpio_pin;
-	u8_t i2c_address;
+	struct i2c_dt_spec i2c;
+	struct gpio_dt_spec int_gpio;
+	uint8_t pgain;
+	uint8_t again;
+	uint8_t ppcount;
+	uint8_t pled_boost;
 };
 
 struct apds9960_data {
-	struct device *i2c;
-	struct device *gpio;
 	struct gpio_callback gpio_cb;
 	struct k_work work;
-	struct device *dev;
-	u16_t sample_crgb[4];
-	u8_t pdata;
-	u8_t gpio_pin;
+	const struct device *dev;
+	uint16_t sample_crgb[4];
+	uint8_t pdata;
 
 #ifdef CONFIG_APDS9960_TRIGGER
 	sensor_trigger_handler_t p_th_handler;
-	struct sensor_trigger p_th_trigger;
+	const struct sensor_trigger *p_th_trigger;
 #else
 	struct k_sem data_sem;
 #endif
 };
 
+static inline void apds9960_setup_int(const struct apds9960_config *cfg,
+				      bool enable)
+{
+	unsigned int flags = enable
+		? GPIO_INT_EDGE_TO_ACTIVE
+		: GPIO_INT_DISABLE;
+
+	gpio_pin_interrupt_configure_dt(&cfg->int_gpio, flags);
+}
+
 #ifdef CONFIG_APDS9960_TRIGGER
 void apds9960_work_cb(struct k_work *work);
 
-int apds9960_attr_set(struct device *dev,
+int apds9960_attr_set(const struct device *dev,
 		      enum sensor_channel chan,
 		      enum sensor_attribute attr,
 		      const struct sensor_value *val);
 
-int apds9960_trigger_set(struct device *dev,
+int apds9960_trigger_set(const struct device *dev,
 			 const struct sensor_trigger *trig,
 			 sensor_trigger_handler_t handler);
 #endif /* CONFIG_APDS9960_TRIGGER */

@@ -1,38 +1,42 @@
-#
 # Copyright (c) 2018, marc-cpdesign
-#
 # SPDX-License-Identifier: Apache-2.0
-#
----
-title: NRF5 GPIO
-version: 0.1
 
-description: >
-    This is a representation of the NRF GPIO nodes
+description: NRF5 GPIO node
+
+compatible: "nordic,nrf-gpio"
+
+include: [gpio-controller.yaml, base.yaml]
 
 properties:
-    compatible:
-      type: string
-      category: required
-      description: compatible strings
-      constraint: "nordic,nrf-gpio"
-      generation: define
+  reg:
+    required: true
 
-    reg:
-      type: int
-      description: mmio register space
-      generation: define
-      category: required
+  gpiote-instance:
+    type: phandle
+    description: |
+      GPIOTE instance that can be used with this GPIO port.
 
-    label:
-      type: string
-      category: required
-      description: Human readable string describing the device (used by Zephyr for API name)
-      generation: define
+  "#gpio-cells":
+    const: 2
 
-cell_string: GPIO
+  sense-edge-mask:
+    type: int
+    description: |
+      Mask of pins that use the GPIO sense mechanism for edge detection.
+      Pins not included in the mask use GPIOTE channels in the event mode.
 
-"#cells":
+  port:
+    type: int
+    required: true
+    description: |
+      The GPIO port number. GPIO port P0 has:
+
+        port = <0>;
+
+      And P1 has:
+
+        port = <1>;
+
+gpio-cells:
   - pin
   - flags
-...

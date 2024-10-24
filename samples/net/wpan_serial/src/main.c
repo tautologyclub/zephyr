@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Intel Corporation
+ * Copyright (c) 2016-2019 Intel Corporation
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -12,22 +12,23 @@
  * with popular Contiki-based native border routers.
  */
 
-#include <logging/log.h>
-LOG_MODULE_REGISTER(net_wpan_serial_sample, LOG_LEVEL_DBG);
+#include <zephyr/logging/log.h>
+LOG_MODULE_REGISTER(wpan_serial, CONFIG_USB_DEVICE_LOG_LEVEL);
 
-#include <string.h>
-#include <device.h>
-#include <uart.h>
-#include <zephyr.h>
-#include <stdio.h>
+#include <zephyr/drivers/uart.h>
+#include <zephyr/kernel.h>
+#include <zephyr/usb/usb_device.h>
+#include <zephyr/random/random.h>
 
-#include <misc/printk.h>
-
-#include <net/buf.h>
-
+#include <zephyr/net_buf.h>
 #include <net_private.h>
+#include <zephyr/net/ieee802154_radio.h>
 
-#include <net/ieee802154_radio.h>
+#if defined(CONFIG_NET_TC_THREAD_COOPERATIVE)
+#define THREAD_PRIORITY K_PRIO_COOP(CONFIG_NUM_COOP_PRIORITIES - 1)
+#else
+#define THREAD_PRIORITY K_PRIO_PREEMPT(8)
+#endif
 
 #define SLIP_END     0300
 #define SLIP_ESC     0333
@@ -46,63 +47,29 @@ static K_THREAD_STACK_DEFINE(rx_stack, 1024);
 static struct k_thread rx_thread_data;
 
 /* TX queue */
-static struct k_sem tx_sem;
 static struct k_fifo tx_queue;
 static K_THREAD_STACK_DEFINE(tx_stack, 1024);
 static struct k_thread tx_thread_data;
 
 /* Buffer for SLIP encoded data for the worst case */
-static u8_t slip_buf[1 + 2 * CONFIG_NET_BUF_DATA_SIZE];
+static uint8_t slip_buf[1 + 2 * CONFIG_NET_BUF_DATA_SIZE];
 
 /* ieee802.15.4 device */
 static struct ieee802154_radio_api *radio_api;
-static struct device *ieee802154_dev;
-u8_t mac_addr[8];
+static const struct device *const ieee802154_dev =
+	DEVICE_DT_GET(DT_CHOSEN(zephyr_ieee802154));
+uint8_t mac_addr[8]; /* in little endian */
 
 /* UART device */
-static struct device *uart_dev;
+static const struct device *const uart_dev =
+	DEVICE_DT_GET_ONE(zephyr_cdc_acm_uart);
 
 /* SLIP state machine */
-static u8_t slip_state = STATE_OK;
+static uint8_t slip_state = STATE_OK;
 
 static struct net_pkt *pkt_curr;
 
 /* General helpers */
-
-#ifdef VERBOSE_DEBUG
-static void hexdump(const char *str, const u8_t *packet, size_t length)
-{
-	int n = 0;
-
-	if (!length) {
-		printk("%s zero-length signal packet\n", str);
-		return;
-	}
-
-	while (length--) {
-		if (n % 16 == 0) {
-			printk("%s %08X ", str, n);
-		}
-
-		printk("%02X ", *packet++);
-
-		n++;
-		if (n % 8 == 0) {
-			if (n % 16 == 0) {
-				printk("\n");
-			} else {
-				printk(" ");
-			}
-		}
-	}
-
-	if (n % 16) {
-		printk("\n");
-	}
-}
-#else
-#define hexdump(...)
-#endif
 
 static int slip_process_byte(unsigned char c)
 {
@@ -168,51 +135,41 @@ static int slip_process_byte(unsigned char c)
 	return 0;
 }
 
-static void interrupt_handler(struct device *dev)
+static void interrupt_handler(const struct device *dev, void *user_data)
 {
-	while (uart_irq_update(dev) && uart_irq_is_pending(dev)) {
-#ifdef VERBOSE_DEBUG
-		LOG_DBG("");
-#endif
-		if (uart_irq_tx_ready(dev)) {
-#ifdef VERBOSE_DEBUG
-			LOG_DBG("TX ready interrupt");
-#endif
+	ARG_UNUSED(user_data);
 
-			k_sem_give(&tx_sem);
+	while (uart_irq_update(dev) && uart_irq_is_pending(dev)) {
+		unsigned char byte;
+
+		if (!uart_irq_rx_ready(dev)) {
+			continue;
 		}
 
-		if (uart_irq_rx_ready(dev)) {
-			unsigned char byte;
-
-#ifdef VERBOSE_DEBUG
-			LOG_DBG("RX ready interrupt");
-#endif
-
-			while (uart_fifo_read(dev, &byte, sizeof(byte))) {
-				if (slip_process_byte(byte)) {
-					/**
-					 * slip_process_byte() returns 1 on
-					 * SLIP_END, even after receiving full
-					 * packet
-					 */
-					if (!pkt_curr) {
-						LOG_DBG("Skip SLIP_END");
-						continue;
-					}
-
-					LOG_DBG("Full packet %p", pkt_curr);
-
-					k_fifo_put(&rx_queue, pkt_curr);
-					pkt_curr = NULL;
+		while (uart_fifo_read(dev, &byte, sizeof(byte))) {
+			if (slip_process_byte(byte)) {
+				/**
+				 * slip_process_byte() returns 1 on
+				 * SLIP_END, even after receiving full
+				 * packet
+				 */
+				if (!pkt_curr) {
+					LOG_DBG("Skip SLIP_END");
+					continue;
 				}
+
+				LOG_DBG("Full packet %p, len %u", pkt_curr,
+					net_pkt_get_len(pkt_curr));
+
+				k_fifo_put(&rx_queue, pkt_curr);
+				pkt_curr = NULL;
 			}
 		}
 	}
 }
 
 /* Allocate and send data to USB Host */
-static void send_data(u8_t *cfg, u8_t *data, size_t len)
+static void send_data(uint8_t *cfg, uint8_t *data, size_t len)
 {
 	struct net_pkt *pkt;
 
@@ -241,8 +198,8 @@ static void send_data(u8_t *cfg, u8_t *data, size_t len)
 
 static void get_ieee_addr(void)
 {
-	u8_t cfg[2] = { '!', 'M' };
-	u8_t mac[8];
+	uint8_t cfg[2] = { '!', 'M' };
+	uint8_t mac[8];
 
 	LOG_DBG("");
 
@@ -254,7 +211,7 @@ static void get_ieee_addr(void)
 
 static void process_request(struct net_buf *buf)
 {
-	u8_t cmd = net_buf_pull_u8(buf);
+	uint8_t cmd = net_buf_pull_u8(buf);
 
 
 	switch (cmd) {
@@ -267,10 +224,10 @@ static void process_request(struct net_buf *buf)
 	}
 }
 
-static void send_pkt_report(u8_t seq, u8_t status, u8_t num_tx)
+static void send_pkt_report(uint8_t seq, uint8_t status, uint8_t num_tx)
 {
-	u8_t cfg[2] = { '!', 'R' };
-	u8_t report[3];
+	uint8_t cfg[2] = { '!', 'R' };
+	uint8_t report[3];
 
 	report[0] = seq;
 	report[1] = status;
@@ -282,7 +239,7 @@ static void send_pkt_report(u8_t seq, u8_t status, u8_t num_tx)
 static void process_data(struct net_pkt *pkt)
 {
 	struct net_buf *buf = net_buf_frag_last(pkt->buffer);
-	u8_t seq, num_attr;
+	uint8_t seq, num_attr;
 	int ret, i;
 
 	seq = net_buf_pull_u8(buf);
@@ -303,7 +260,8 @@ static void process_data(struct net_pkt *pkt)
 	}
 
 	/* Transmit data through radio */
-	ret = radio_api->tx(ieee802154_dev, pkt, buf);
+	ret = radio_api->tx(ieee802154_dev, IEEE802154_TX_MODE_DIRECT,
+			    pkt, buf);
 	if (ret) {
 		LOG_ERR("Error transmit data");
 	}
@@ -315,9 +273,9 @@ static void process_data(struct net_pkt *pkt)
 	send_pkt_report(seq, ret, 1);
 }
 
-static void set_channel(u8_t chan)
+static void set_channel(uint8_t chan)
 {
-	LOG_DBG("Set channel %c", chan);
+	LOG_DBG("Set channel %u", chan);
 
 	radio_api->set_channel(ieee802154_dev, chan);
 }
@@ -325,7 +283,7 @@ static void set_channel(u8_t chan)
 static void process_config(struct net_pkt *pkt)
 {
 	struct net_buf *buf = net_buf_frag_last(pkt->buffer);
-	u8_t cmd = net_buf_pull_u8(buf);
+	uint8_t cmd = net_buf_pull_u8(buf);
 
 	LOG_DBG("Process config %c", cmd);
 
@@ -341,21 +299,25 @@ static void process_config(struct net_pkt *pkt)
 	}
 }
 
-static void rx_thread(void)
+static void rx_thread(void *p1, void *p2, void *p3)
 {
-	LOG_INF("RX thread started");
+	ARG_UNUSED(p1);
+	ARG_UNUSED(p2);
+	ARG_UNUSED(p3);
 
-	while (1) {
+	LOG_DBG("RX thread started");
+
+	while (true) {
 		struct net_pkt *pkt;
 		struct net_buf *buf;
-		u8_t specifier;
+		uint8_t specifier;
 
 		pkt = k_fifo_get(&rx_queue, K_FOREVER);
 		buf = net_buf_frag_last(pkt->buffer);
 
-		LOG_DBG("Got pkt %p buf %p", pkt, buf);
+		LOG_DBG("rx_queue pkt %p buf %p", pkt, buf);
 
-		hexdump("SLIP >", buf->data, buf->len);
+		LOG_HEXDUMP_DBG(buf->data, buf->len, "SLIP >");
 
 		/* TODO: process */
 		specifier = net_buf_pull_u8(buf);
@@ -372,15 +334,13 @@ static void rx_thread(void)
 		}
 
 		net_pkt_unref(pkt);
-
-		k_yield();
 	}
 }
 
-static size_t slip_buffer(u8_t *sbuf, struct net_buf *buf)
+static size_t slip_buffer(uint8_t *sbuf, struct net_buf *buf)
 {
 	size_t len = buf->len;
-	u8_t *sbuf_orig = sbuf;
+	uint8_t *sbuf_orig = sbuf;
 	int i;
 
 	/**
@@ -389,7 +349,7 @@ static size_t slip_buffer(u8_t *sbuf, struct net_buf *buf)
 	 */
 
 	for (i = 0; i < len; i++) {
-		u8_t byte = net_buf_pull_u8(buf);
+		uint8_t byte = net_buf_pull_u8(buf);
 
 		switch (byte) {
 		case SLIP_END:
@@ -410,22 +370,38 @@ static size_t slip_buffer(u8_t *sbuf, struct net_buf *buf)
 	return sbuf - sbuf_orig;
 }
 
+static int try_write(uint8_t *data, uint16_t len)
+{
+	int wrote;
+
+	while (len) {
+		wrote = uart_fifo_fill(uart_dev, data, len);
+		if (wrote <= 0) {
+			return wrote;
+		}
+
+		len -= wrote;
+		data += wrote;
+	}
+
+	return 0;
+}
+
 /**
  * TX - transmit to SLIP interface
  */
-static void tx_thread(void)
+static void tx_thread(void *p1, void *p2, void *p3)
 {
+	ARG_UNUSED(p1);
+	ARG_UNUSED(p2);
+	ARG_UNUSED(p3);
+
 	LOG_DBG("TX thread started");
 
-	/* Allow to send one TX */
-	k_sem_give(&tx_sem);
-
-	while (1) {
+	while (true) {
 		struct net_pkt *pkt;
 		struct net_buf *buf;
 		size_t len;
-
-		k_sem_take(&tx_sem, K_FOREVER);
 
 		pkt = k_fifo_get(&tx_queue, K_FOREVER);
 		buf = net_buf_frag_last(pkt->buffer);
@@ -433,20 +409,17 @@ static void tx_thread(void)
 
 		LOG_DBG("Send pkt %p buf %p len %d", pkt, buf, len);
 
-		hexdump("SLIP <", buf->data, buf->len);
+		LOG_HEXDUMP_DBG(buf->data, buf->len, "SLIP <");
 
 		/* remove FCS 2 bytes */
 		buf->len -= 2U;
 
 		/* SLIP encode and send */
 		len = slip_buffer(slip_buf, buf);
-		uart_fifo_fill(uart_dev, slip_buf, len);
+
+		try_write(slip_buf, len);
 
 		net_pkt_unref(pkt);
-
-#if 0
-		k_yield();
-#endif
 	}
 }
 
@@ -456,34 +429,31 @@ static void init_rx_queue(void)
 
 	k_thread_create(&rx_thread_data, rx_stack,
 			K_THREAD_STACK_SIZEOF(rx_stack),
-			(k_thread_entry_t)rx_thread,
-			NULL, NULL, NULL, K_PRIO_COOP(8), 0, K_NO_WAIT);
+			rx_thread,
+			NULL, NULL, NULL, THREAD_PRIORITY, 0, K_NO_WAIT);
 }
 
 static void init_tx_queue(void)
 {
-	k_sem_init(&tx_sem, 0, UINT_MAX);
 	k_fifo_init(&tx_queue);
 
 	k_thread_create(&tx_thread_data, tx_stack,
 			K_THREAD_STACK_SIZEOF(tx_stack),
-			(k_thread_entry_t)tx_thread,
-			NULL, NULL, NULL, K_PRIO_COOP(8), 0, K_NO_WAIT);
+			tx_thread,
+			NULL, NULL, NULL, THREAD_PRIORITY, 0, K_NO_WAIT);
 }
 
 /**
  * FIXME choose correct OUI, or add support in L2
  */
-static u8_t *get_mac(struct device *dev)
+static uint8_t *get_mac(const struct device *dev)
 {
-	u32_t *ptr = (u32_t *)mac_addr;
-
 	mac_addr[7] = 0x00;
 	mac_addr[6] = 0x12;
 	mac_addr[5] = 0x4b;
-
 	mac_addr[4] = 0x00;
-	UNALIGNED_PUT(sys_rand32_get(), ptr);
+
+	sys_rand_get(mac_addr, 4U);
 
 	mac_addr[0] = (mac_addr[0] & ~0x01) | 0x02;
 
@@ -494,13 +464,12 @@ static bool init_ieee802154(void)
 {
 	LOG_INF("Initialize ieee802.15.4");
 
-	ieee802154_dev = device_get_binding(CONFIG_IEEE802154_CC2520_DRV_NAME);
-	if (!ieee802154_dev) {
-		LOG_ERR("Cannot get CC250 device");
+	if (!device_is_ready(ieee802154_dev)) {
+		LOG_ERR("IEEE 802.15.4 device not ready");
 		return false;
 	}
 
-	radio_api = (struct ieee802154_radio_api *)ieee802154_dev->driver_api;
+	radio_api = (struct ieee802154_radio_api *)ieee802154_dev->api;
 
 	/**
 	 * Do actual initialization of the chip
@@ -510,7 +479,7 @@ static bool init_ieee802154(void)
 	if (IEEE802154_HW_FILTER &
 	    radio_api->get_capabilities(ieee802154_dev)) {
 		struct ieee802154_filter filter;
-		u16_t short_addr;
+		uint16_t short_addr;
 
 		/* Set short address */
 		short_addr = (mac_addr[0] << 8) + mac_addr[1];
@@ -538,7 +507,7 @@ static bool init_ieee802154(void)
 	}
 
 #ifdef CONFIG_NET_CONFIG_SETTINGS
-	LOG_INF("Set channel %x", CONFIG_NET_CONFIG_IEEE802154_CHANNEL);
+	LOG_INF("Set channel %u", CONFIG_NET_CONFIG_IEEE802154_CHANNEL);
 	radio_api->set_channel(ieee802154_dev,
 			       CONFIG_NET_CONFIG_IEEE802154_CHANNEL);
 #endif /* CONFIG_NET_CONFIG_SETTINGS */
@@ -551,43 +520,56 @@ static bool init_ieee802154(void)
 
 int net_recv_data(struct net_if *iface, struct net_pkt *pkt)
 {
-	LOG_DBG("Got data, pkt %p, frags->len %d",
-		    pkt, net_pkt_get_len(pkt));
+	LOG_DBG("Received pkt %p, len %d", pkt, net_pkt_get_len(pkt));
 
 	k_fifo_put(&tx_queue, pkt);
 
 	return 0;
 }
 
-void main(void)
+enum net_verdict ieee802154_handle_ack(struct net_if *iface, struct net_pkt *pkt)
 {
-	struct device *dev;
-	u32_t baudrate, dtr = 0U;
+	return NET_CONTINUE;
+}
+
+int main(void)
+{
+	uint32_t baudrate, dtr = 0U;
 	int ret;
 
-	dev = device_get_binding(CONFIG_CDC_ACM_PORT_NAME_0);
-	if (!dev) {
-		LOG_ERR("CDC ACM device not found");
-		return;
+	LOG_INF("Starting wpan_serial application");
+
+	if (!device_is_ready(uart_dev)) {
+		LOG_ERR("CDC ACM device not ready");
+		return 0;
+	}
+
+	ret = usb_enable(NULL);
+	if (ret != 0) {
+		LOG_ERR("Failed to enable USB");
+		return 0;
 	}
 
 	LOG_DBG("Wait for DTR");
 
 	while (1) {
-		uart_line_ctrl_get(dev, LINE_CTRL_DTR, &dtr);
-		if (dtr)
+		uart_line_ctrl_get(uart_dev, UART_LINE_CTRL_DTR, &dtr);
+		if (dtr) {
 			break;
+		} else {
+			/* Give CPU resources to low priority threads. */
+			k_sleep(K_MSEC(100));
+		}
 	}
-
-	uart_dev = dev;
 
 	LOG_DBG("DTR set, continue");
 
-	ret = uart_line_ctrl_get(dev, LINE_CTRL_BAUD_RATE, &baudrate);
-	if (ret)
-		printk("Failed to get baudrate, ret code %d\n", ret);
-	else
-		printk("Baudrate detected: %d\n", baudrate);
+	ret = uart_line_ctrl_get(uart_dev, UART_LINE_CTRL_BAUD_RATE, &baudrate);
+	if (ret) {
+		LOG_WRN("Failed to get baudrate, ret code %d", ret);
+	} else {
+		LOG_DBG("Baudrate detected: %d", baudrate);
+	}
 
 	LOG_INF("USB serial initialized");
 
@@ -603,14 +585,12 @@ void main(void)
 	/* Initialize ieee802154 device */
 	if (!init_ieee802154()) {
 		LOG_ERR("Unable to initialize ieee802154");
-		return;
-	};
+		return 0;
+	}
 
-	uart_irq_callback_set(dev, interrupt_handler);
+	uart_irq_callback_set(uart_dev, interrupt_handler);
 
 	/* Enable rx interrupts */
-	uart_irq_rx_enable(dev);
-
-	/* Enable tx interrupts */
-	uart_irq_tx_enable(dev);
+	uart_irq_rx_enable(uart_dev);
+	return 0;
 }

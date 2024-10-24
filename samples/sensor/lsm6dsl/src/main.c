@@ -4,16 +4,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <zephyr.h>
-#include <device.h>
-#include <sensor.h>
+#include <zephyr/kernel.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/sensor.h>
 #include <stdio.h>
-#include <misc/util.h>
-
-static inline float out_ev(struct sensor_value *val)
-{
-	return (val->val1 + (float)val->val2 / 1000000);
-}
+#include <zephyr/sys/util.h>
 
 static int print_samples;
 static int lsm6dsl_trig_cnt;
@@ -28,8 +23,8 @@ static struct sensor_value press_out, temp_out;
 #endif
 
 #ifdef CONFIG_LSM6DSL_TRIGGER
-static void lsm6dsl_trigger_handler(struct device *dev,
-				    struct sensor_trigger *trig)
+static void lsm6dsl_trigger_handler(const struct device *dev,
+				    const struct sensor_trigger *trig)
 {
 	static struct sensor_value accel_x, accel_y, accel_z;
 	static struct sensor_value gyro_x, gyro_y, gyro_z;
@@ -95,16 +90,16 @@ static void lsm6dsl_trigger_handler(struct device *dev,
 }
 #endif
 
-void main(void)
+int main(void)
 {
 	int cnt = 0;
 	char out_str[64];
 	struct sensor_value odr_attr;
-	struct device *lsm6dsl_dev = device_get_binding(DT_ST_LSM6DSL_0_LABEL);
+	const struct device *const lsm6dsl_dev = DEVICE_DT_GET_ONE(st_lsm6dsl);
 
-	if (lsm6dsl_dev == NULL) {
-		printk("Could not get LSM6DSL device\n");
-		return;
+	if (!device_is_ready(lsm6dsl_dev)) {
+		printk("sensor: device not ready.\n");
+		return 0;
 	}
 
 	/* set accel/gyro sampling frequency to 104 Hz */
@@ -114,13 +109,13 @@ void main(void)
 	if (sensor_attr_set(lsm6dsl_dev, SENSOR_CHAN_ACCEL_XYZ,
 			    SENSOR_ATTR_SAMPLING_FREQUENCY, &odr_attr) < 0) {
 		printk("Cannot set sampling frequency for accelerometer.\n");
-		return;
+		return 0;
 	}
 
 	if (sensor_attr_set(lsm6dsl_dev, SENSOR_CHAN_GYRO_XYZ,
 			    SENSOR_ATTR_SAMPLING_FREQUENCY, &odr_attr) < 0) {
 		printk("Cannot set sampling frequency for gyro.\n");
-		return;
+		return 0;
 	}
 
 #ifdef CONFIG_LSM6DSL_TRIGGER
@@ -128,12 +123,16 @@ void main(void)
 
 	trig.type = SENSOR_TRIG_DATA_READY;
 	trig.chan = SENSOR_CHAN_ACCEL_XYZ;
-	sensor_trigger_set(lsm6dsl_dev, &trig, lsm6dsl_trigger_handler);
+
+	if (sensor_trigger_set(lsm6dsl_dev, &trig, lsm6dsl_trigger_handler) != 0) {
+		printk("Could not set sensor type and channel\n");
+		return 0;
+	}
 #endif
 
 	if (sensor_sample_fetch(lsm6dsl_dev) < 0) {
 		printk("Sensor sample update error\n");
-		return;
+		return 0;
 	}
 
 	while (1) {
@@ -142,34 +141,38 @@ void main(void)
 		printf("LSM6DSL sensor samples:\n\n");
 
 		/* lsm6dsl accel */
-		sprintf(out_str, "accel (%f %f %f) m/s2", out_ev(&accel_x_out),
-							out_ev(&accel_y_out),
-							out_ev(&accel_z_out));
+		sprintf(out_str, "accel x:%f ms/2 y:%f ms/2 z:%f ms/2",
+							  sensor_value_to_double(&accel_x_out),
+							  sensor_value_to_double(&accel_y_out),
+							  sensor_value_to_double(&accel_z_out));
 		printk("%s\n", out_str);
 
 		/* lsm6dsl gyro */
-		sprintf(out_str, "gyro (%f %f %f) dps", out_ev(&gyro_x_out),
-							out_ev(&gyro_y_out),
-							out_ev(&gyro_z_out));
+		sprintf(out_str, "gyro x:%f dps y:%f dps z:%f dps",
+							   sensor_value_to_double(&gyro_x_out),
+							   sensor_value_to_double(&gyro_y_out),
+							   sensor_value_to_double(&gyro_z_out));
 		printk("%s\n", out_str);
 
 #if defined(CONFIG_LSM6DSL_EXT0_LIS2MDL)
 		/* lsm6dsl external magn */
-		sprintf(out_str, "magn (%f %f %f) gauss", out_ev(&magn_x_out),
-							 out_ev(&magn_y_out),
-							 out_ev(&magn_z_out));
+		sprintf(out_str, "magn x:%f gauss y:%f gauss z:%f gauss",
+							   sensor_value_to_double(&magn_x_out),
+							   sensor_value_to_double(&magn_y_out),
+							   sensor_value_to_double(&magn_z_out));
 		printk("%s\n", out_str);
 #endif
 
 #if defined(CONFIG_LSM6DSL_EXT0_LPS22HB)
 		/* lsm6dsl external press/temp */
-		sprintf(out_str, "press (%f) kPa - temp (%f) deg",
-			out_ev(&press_out), out_ev(&temp_out));
+		sprintf(out_str, "press: %f kPa - temp: %f deg",
+			sensor_value_to_double(&press_out), sensor_value_to_double(&temp_out));
 		printk("%s\n", out_str);
 #endif
 
-		printk("- (%d) (trig_cnt: %d)\n\n", ++cnt, lsm6dsl_trig_cnt);
+		printk("loop:%d trig_cnt:%d\n\n", ++cnt, lsm6dsl_trig_cnt);
+
 		print_samples = 1;
-		k_sleep(2000);
+		k_sleep(K_MSEC(2000));
 	}
 }

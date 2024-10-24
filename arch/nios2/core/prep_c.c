@@ -17,28 +17,31 @@
  */
 
 #include <zephyr/types.h>
-#include <toolchain.h>
-#include <linker/linker-defs.h>
-#include <kernel_structs.h>
+#include <zephyr/toolchain.h>
+#include <zephyr/linker/linker-defs.h>
+#include <zephyr/kernel_structs.h>
 #include <kernel_internal.h>
+#include <zephyr/platform/hooks.h>
+#include <zephyr/arch/cache.h>
 
 /**
- *
  * @brief Prepare to and run C code
  *
  * This routine prepares for the execution of and runs C code.
- *
- * @return N/A
  */
 
-void _PrepC(void)
+void z_prep_c(void)
 {
+#if defined(CONFIG_SOC_PREP_HOOK)
+	soc_prep_hook();
+#endif
+
 	z_bss_zero();
-#ifdef CONFIG_XIP
 	z_data_copy();
 	/* In most XIP scenarios we copy the exception code into RAM, so need
 	 * to flush instruction cache.
 	 */
+#ifdef CONFIG_XIP
 	z_nios2_icache_flush_all();
 #if ALT_CPU_ICACHE_SIZE > 0
 	/* Only need to flush the data cache here if there actually is an
@@ -47,6 +50,9 @@ void _PrepC(void)
 	 */
 	z_nios2_dcache_flush_all();
 #endif
+#endif
+#if CONFIG_ARCH_CACHE
+	arch_cache_init();
 #endif
 	z_cstart();
 	CODE_UNREACHABLE;

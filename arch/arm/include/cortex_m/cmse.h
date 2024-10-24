@@ -11,12 +11,8 @@
  * CMSE API for Cortex-M23/M33 CPUs.
  */
 
-#ifndef ZEPHYR_ARCH_ARM_INCLUDE_CORTEX_M_CMSE_H_
-#define ZEPHYR_ARCH_ARM_INCLUDE_CORTEX_M_CMSE_H_
-
-#ifdef __cplusplus
-extern "C" {
-#endif
+#ifndef ZEPHYR_ARCH_ARM_INCLUDE_AARCH32_CORTEX_M_CMSE_H_
+#define ZEPHYR_ARCH_ARM_INCLUDE_AARCH32_CORTEX_M_CMSE_H_
 
 #ifdef _ASMLANGUAGE
 
@@ -27,6 +23,9 @@ extern "C" {
 #include <arm_cmse.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /*
  * Address information retrieval based on the TT instructions.
@@ -51,7 +50,7 @@ extern "C" {
  *
  * @return a valid MPU region number or -EINVAL
  */
-int arm_cmse_mpu_region_get(u32_t addr);
+int arm_cmse_mpu_region_get(uint32_t addr);
 
 /**
  * @brief Read accessibility of an address
@@ -70,7 +69,7 @@ int arm_cmse_mpu_region_get(u32_t addr);
  *
  * @return 1 if address is readable, 0 otherwise.
  */
-int arm_cmse_addr_read_ok(u32_t addr, int force_npriv);
+int arm_cmse_addr_read_ok(uint32_t addr, int force_npriv);
 
 /**
  * @brief Read and Write accessibility of an address
@@ -90,7 +89,7 @@ int arm_cmse_addr_read_ok(u32_t addr, int force_npriv);
  *
  * @return 1 if address is Read and Writable, 0 otherwise.
  */
-int arm_cmse_addr_readwrite_ok(u32_t addr, int force_npriv);
+int arm_cmse_addr_readwrite_ok(uint32_t addr, int force_npriv);
 
 /**
  * @brief Read accessibility of an address range
@@ -112,7 +111,7 @@ int arm_cmse_addr_readwrite_ok(u32_t addr, int force_npriv);
  *
  * @return 1 if address range is readable, 0 otherwise.
  */
-int arm_cmse_addr_range_read_ok(u32_t addr, u32_t size, int force_npriv);
+int arm_cmse_addr_range_read_ok(uint32_t addr, uint32_t size, int force_npriv);
 
 /**
  * @brief Read and Write accessibility of an address range
@@ -134,9 +133,11 @@ int arm_cmse_addr_range_read_ok(u32_t addr, u32_t size, int force_npriv);
  *
  * @return 1 if address range is Read and Writable, 0 otherwise.
  */
-int arm_cmse_addr_range_readwrite_ok(u32_t addr, u32_t size, int force_npriv);
+int arm_cmse_addr_range_readwrite_ok(uint32_t addr, uint32_t size, int force_npriv);
 
-/* Required for C99 compilation */
+/* Required for C99 compilation (required for GCC-8.x version,
+ * where typeof is used instead of __typeof__)
+ */
 #ifndef typeof
 #define typeof  __typeof__
 #endif
@@ -231,7 +232,7 @@ int arm_cmse_addr_range_readwrite_ok(u32_t addr, u32_t size, int force_npriv);
  *
  * @return a valid MPU region number or -EINVAL
   */
-int arm_cmse_mpu_nonsecure_region_get(u32_t addr);
+int arm_cmse_mpu_nonsecure_region_get(uint32_t addr);
 
 /**
  * @brief Get the SAU region number of an address
@@ -249,7 +250,7 @@ int arm_cmse_mpu_nonsecure_region_get(u32_t addr);
  *
  * @return a valid SAU region number or -EINVAL
   */
-int arm_cmse_sau_region_get(u32_t addr);
+int arm_cmse_sau_region_get(uint32_t addr);
 
 /**
  * @brief Get the IDAU region number of an address
@@ -267,7 +268,7 @@ int arm_cmse_sau_region_get(u32_t addr);
  *
  * @return a valid IDAU region number or -EINVAL
   */
-int arm_cmse_idau_region_get(u32_t addr);
+int arm_cmse_idau_region_get(uint32_t addr);
 
 /**
  * @brief Security attribution of an address
@@ -279,7 +280,7 @@ int arm_cmse_idau_region_get(u32_t addr);
  *
  * @return 1 if address is Secure, 0 otherwise.
  */
-int arm_cmse_addr_is_secure(u32_t addr);
+int arm_cmse_addr_is_secure(uint32_t addr);
 
 /**
  * @brief Non-Secure Read accessibility of an address
@@ -299,7 +300,7 @@ int arm_cmse_addr_is_secure(u32_t addr);
  *
  * @return 1 if address is readable from Non-Secure state, 0 otherwise.
  */
-int arm_cmse_addr_nonsecure_read_ok(u32_t addr, int force_npriv);
+int arm_cmse_addr_nonsecure_read_ok(uint32_t addr, int force_npriv);
 
 /**
  * @brief Non-Secure Read and Write accessibility of an address
@@ -319,7 +320,7 @@ int arm_cmse_addr_nonsecure_read_ok(u32_t addr, int force_npriv);
  *
  * @return 1 if address is Read and Writable from Non-Secure state, 0 otherwise
  */
-int arm_cmse_addr_nonsecure_readwrite_ok(u32_t addr, int force_npriv);
+int arm_cmse_addr_nonsecure_readwrite_ok(uint32_t addr, int force_npriv);
 
 /**
  * @brief Non-Secure Read accessibility of an address range
@@ -341,7 +342,7 @@ int arm_cmse_addr_nonsecure_readwrite_ok(u32_t addr, int force_npriv);
  *
  * @return 1 if address range is readable, 0 otherwise.
  */
-int arm_cmse_addr_range_nonsecure_read_ok(u32_t addr, u32_t size,
+int arm_cmse_addr_range_nonsecure_read_ok(uint32_t addr, uint32_t size,
 	int force_npriv);
 
 /**
@@ -364,7 +365,7 @@ int arm_cmse_addr_range_nonsecure_read_ok(u32_t addr, u32_t size,
  *
  * @return 1 if address range is readable, 0 otherwise.
  */
-int arm_cmse_addr_range_nonsecure_readwrite_ok(u32_t addr, u32_t size,
+int arm_cmse_addr_range_nonsecure_readwrite_ok(uint32_t addr, uint32_t size,
 	int force_npriv);
 
 /**
@@ -443,10 +444,10 @@ int arm_cmse_addr_range_nonsecure_readwrite_ok(u32_t addr, u32_t size,
 
 #endif /* CONFIG_ARM_SECURE_FIRMWARE */
 
-#endif /* _ASMLANGUAGE */
-
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* ZEPHYR_ARCH_ARM_INCLUDE_CORTEX_M_CMSE_H_ */
+#endif /* _ASMLANGUAGE */
+
+#endif /* ZEPHYR_ARCH_ARM_INCLUDE_AARCH32_CORTEX_M_CMSE_H_ */

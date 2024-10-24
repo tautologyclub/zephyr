@@ -11,7 +11,16 @@
  * This file provides the common thread entry function
  */
 
-#include <kernel.h>
+#include <zephyr/kernel.h>
+#ifdef CONFIG_CURRENT_THREAD_USE_TLS
+#include <zephyr/random/random.h>
+
+Z_THREAD_LOCAL k_tid_t z_tls_current;
+#endif
+
+#ifdef CONFIG_STACK_CANARIES_TLS
+extern Z_THREAD_LOCAL volatile uintptr_t __stack_chk_guard;
+#endif /* CONFIG_STACK_CANARIES_TLS */
 
 /*
  * Common thread entry point function (used by all threads)
@@ -26,20 +35,24 @@
 FUNC_NORETURN void z_thread_entry(k_thread_entry_t entry,
 				 void *p1, void *p2, void *p3)
 {
+#ifdef CONFIG_CURRENT_THREAD_USE_TLS
+	z_tls_current = k_sched_current_thread_query();
+#endif
+#ifdef CONFIG_STACK_CANARIES_TLS
+	uintptr_t stack_guard;
+
+	sys_rand_get((uint8_t *)&stack_guard, sizeof(stack_guard));
+	__stack_chk_guard = stack_guard;
+	__stack_chk_guard <<= 8;
+#endif	/* CONFIG_STACK_CANARIES */
 	entry(p1, p2, p3);
 
-#ifdef CONFIG_MULTITHREADING
 	k_thread_abort(k_current_get());
-#else
-	for (;;) {
-		k_cpu_idle();
-	}
-#endif
 
 	/*
 	 * Compiler can't tell that k_thread_abort() won't return and issues a
 	 * warning unless we tell it that control never gets this far.
 	 */
 
-	CODE_UNREACHABLE;
+	CODE_UNREACHABLE; /* LCOV_EXCL_LINE */
 }

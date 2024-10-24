@@ -4,42 +4,115 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <gpio.h>
-#include <syscall_handler.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/internal/syscall_handler.h>
 
-Z_SYSCALL_HANDLER(gpio_config, port, access_op, pin, flags)
+static inline int z_vrfy_gpio_pin_configure(const struct device *port,
+					    gpio_pin_t pin,
+					    gpio_flags_t flags)
 {
-	Z_OOPS(Z_SYSCALL_DRIVER_GPIO(port, config));
-	return z_impl_gpio_config((struct device *)port, access_op, pin, flags);
+	K_OOPS(K_SYSCALL_DRIVER_GPIO(port, pin_configure));
+	return z_impl_gpio_pin_configure((const struct device *)port,
+					  pin,
+					  flags);
 }
+#include <zephyr/syscalls/gpio_pin_configure_mrsh.c>
 
-Z_SYSCALL_HANDLER(gpio_write, port, access_op, pin, value)
+#ifdef CONFIG_GPIO_GET_CONFIG
+static inline int z_vrfy_gpio_pin_get_config(const struct device *port,
+					     gpio_pin_t pin,
+					     gpio_flags_t *flags)
 {
-	Z_OOPS(Z_SYSCALL_DRIVER_GPIO(port, write));
-	return z_impl_gpio_write((struct device *)port, access_op, pin, value);
-}
+	K_OOPS(K_SYSCALL_DRIVER_GPIO(port, pin_get_config));
+	K_OOPS(K_SYSCALL_MEMORY_WRITE(flags, sizeof(gpio_flags_t)));
 
-Z_SYSCALL_HANDLER(gpio_read, port, access_op, pin, value)
-{
-	Z_OOPS(Z_SYSCALL_DRIVER_GPIO(port, read));
-	Z_OOPS(Z_SYSCALL_MEMORY_WRITE(value, sizeof(u32_t)));
-	return z_impl_gpio_read((struct device *)port, access_op, pin,
-			       (u32_t *)value);
+	return z_impl_gpio_pin_get_config(port, pin, flags);
 }
+#include <zephyr/syscalls/gpio_pin_get_config_mrsh.c>
+#endif
 
-Z_SYSCALL_HANDLER(gpio_enable_callback, port, access_op, pin)
+static inline int z_vrfy_gpio_port_get_raw(const struct device *port,
+					   gpio_port_value_t *value)
 {
-	return z_impl_gpio_enable_callback((struct device *)port, access_op,
-					  pin);
+	K_OOPS(K_SYSCALL_DRIVER_GPIO(port, port_get_raw));
+	K_OOPS(K_SYSCALL_MEMORY_WRITE(value, sizeof(gpio_port_value_t)));
+	return z_impl_gpio_port_get_raw((const struct device *)port,
+					(gpio_port_value_t *)value);
 }
+#include <zephyr/syscalls/gpio_port_get_raw_mrsh.c>
 
-Z_SYSCALL_HANDLER(gpio_disable_callback, port, access_op, pin)
+static inline int z_vrfy_gpio_port_set_masked_raw(const struct device *port,
+						  gpio_port_pins_t mask,
+						  gpio_port_value_t value)
 {
-	return z_impl_gpio_disable_callback((struct device *)port, access_op,
-					   pin);
+	K_OOPS(K_SYSCALL_DRIVER_GPIO(port, port_set_masked_raw));
+	return z_impl_gpio_port_set_masked_raw((const struct device *)port,
+						mask,
+						value);
 }
+#include <zephyr/syscalls/gpio_port_set_masked_raw_mrsh.c>
 
-Z_SYSCALL_HANDLER(gpio_get_pending_int, port)
+static inline int z_vrfy_gpio_port_set_bits_raw(const struct device *port,
+						gpio_port_pins_t pins)
 {
-	return z_impl_gpio_get_pending_int((struct device *)port);
+	K_OOPS(K_SYSCALL_DRIVER_GPIO(port, port_set_bits_raw));
+	return z_impl_gpio_port_set_bits_raw((const struct device *)port,
+					     pins);
 }
+#include <zephyr/syscalls/gpio_port_set_bits_raw_mrsh.c>
+
+static inline int z_vrfy_gpio_port_clear_bits_raw(const struct device *port,
+						  gpio_port_pins_t pins)
+{
+	K_OOPS(K_SYSCALL_DRIVER_GPIO(port, port_clear_bits_raw));
+	return z_impl_gpio_port_clear_bits_raw((const struct device *)port,
+					       pins);
+}
+#include <zephyr/syscalls/gpio_port_clear_bits_raw_mrsh.c>
+
+static inline int z_vrfy_gpio_port_toggle_bits(const struct device *port,
+					       gpio_port_pins_t pins)
+{
+	K_OOPS(K_SYSCALL_DRIVER_GPIO(port, port_toggle_bits));
+	return z_impl_gpio_port_toggle_bits((const struct device *)port, pins);
+}
+#include <zephyr/syscalls/gpio_port_toggle_bits_mrsh.c>
+
+static inline int z_vrfy_gpio_pin_interrupt_configure(const struct device *port,
+						      gpio_pin_t pin,
+						      gpio_flags_t flags)
+{
+	K_OOPS(K_SYSCALL_DRIVER_GPIO(port, pin_interrupt_configure));
+	return z_impl_gpio_pin_interrupt_configure((const struct device *)port,
+						   pin,
+						   flags);
+}
+#include <zephyr/syscalls/gpio_pin_interrupt_configure_mrsh.c>
+
+static inline int z_vrfy_gpio_get_pending_int(const struct device *dev)
+{
+	K_OOPS(K_SYSCALL_DRIVER_GPIO(dev, get_pending_int));
+
+	return z_impl_gpio_get_pending_int((const struct device *)dev);
+}
+#include <zephyr/syscalls/gpio_get_pending_int_mrsh.c>
+
+#ifdef CONFIG_GPIO_GET_DIRECTION
+static inline int z_vrfy_gpio_port_get_direction(const struct device *dev, gpio_port_pins_t map,
+						 gpio_port_pins_t *inputs,
+						 gpio_port_pins_t *outputs)
+{
+	K_OOPS(K_SYSCALL_DRIVER_GPIO(dev, port_get_direction));
+
+	if (inputs != NULL) {
+		K_OOPS(K_SYSCALL_MEMORY_WRITE(inputs, sizeof(gpio_port_pins_t)));
+	}
+
+	if (outputs != NULL) {
+		K_OOPS(K_SYSCALL_MEMORY_WRITE(outputs, sizeof(gpio_port_pins_t)));
+	}
+
+	return z_impl_gpio_port_get_direction(dev, map, inputs, outputs);
+}
+#include <zephyr/syscalls/gpio_port_get_direction_mrsh.c>
+#endif /* CONFIG_GPIO_GET_DIRECTION */

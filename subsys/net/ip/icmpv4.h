@@ -15,33 +15,24 @@
 
 #include <zephyr/types.h>
 
-#include <net/net_ip.h>
-#include <net/net_pkt.h>
+#include <zephyr/net/net_ip.h>
+#include <zephyr/net/net_pkt.h>
 
 #define NET_ICMPV4_DST_UNREACH  3	/* Destination unreachable */
-#define NET_ICMPV4_ECHO_REQUEST 8
-#define NET_ICMPV4_ECHO_REPLY   0
+#define NET_ICMPV4_TIME_EXCEEDED 11	/* Time exceeded */
+#define NET_ICMPV4_BAD_IP_HEADER 12	/* Bad IP header */
 
 #define NET_ICMPV4_DST_UNREACH_NO_PROTO  2 /* Protocol not supported */
 #define NET_ICMPV4_DST_UNREACH_NO_PORT   3 /* Port unreachable */
+#define NET_ICMPV4_TIME_EXCEEDED_FRAGMENT_REASSEMBLY_TIME 1 /* Fragment reassembly time exceeded */
+#define NET_ICMPV4_BAD_IP_HEADER_LENGTH  2 /* Bad length field */
 
 #define NET_ICMPV4_UNUSED_LEN 4
 
 struct net_icmpv4_echo_req {
-	u16_t identifier;
-	u16_t sequence;
+	uint16_t identifier;
+	uint16_t sequence;
 } __packed;
-
-typedef enum net_verdict (*icmpv4_callback_handler_t)(
-					struct net_pkt *pkt,
-					struct net_ipv4_hdr *ip_hdr);
-
-struct net_icmpv4_handler {
-	sys_snode_t node;
-	icmpv4_callback_handler_t handler;
-	u8_t type;
-	u8_t code;
-};
 
 /**
  * @brief Send ICMPv4 error message.
@@ -50,35 +41,15 @@ struct net_icmpv4_handler {
  * @param code Code of the type of the error message.
  * @return Return 0 if the sending succeed, <0 otherwise.
  */
-int net_icmpv4_send_error(struct net_pkt *pkt, u8_t type, u8_t code);
+int net_icmpv4_send_error(struct net_pkt *pkt, uint8_t type, uint8_t code);
 
-/**
- * @brief Send ICMPv4 echo request message.
- *
- * @param iface Network interface.
- * @param dst IPv4 address of the target host.
- * @param identifier An identifier to aid in matching Echo Replies
- * to this Echo Request. May be zero.
- * @param sequence A sequence number to aid in matching Echo Replies
- * to this Echo Request. May be zero.
- *
- * @return Return 0 if the sending succeed, <0 otherwise.
- */
-int net_icmpv4_send_echo_request(struct net_if *iface,
-				 struct in_addr *dst,
-				 u16_t identifier,
-				 u16_t sequence);
-
-void net_icmpv4_register_handler(struct net_icmpv4_handler *handler);
-
-void net_icmpv4_unregister_handler(struct net_icmpv4_handler *handler);
-
+#if defined(CONFIG_NET_NATIVE_IPV4)
 enum net_verdict net_icmpv4_input(struct net_pkt *pkt,
 				  struct net_ipv4_hdr *ip_hdr);
 
-int net_icmpv4_finalize(struct net_pkt *pkt);
+int net_icmpv4_create(struct net_pkt *pkt, uint8_t icmp_type, uint8_t icmp_code);
+int net_icmpv4_finalize(struct net_pkt *pkt, bool force_chksum);
 
-#if defined(CONFIG_NET_IPV4)
 void net_icmpv4_init(void);
 #else
 #define net_icmpv4_init(...)

@@ -1,43 +1,36 @@
----
-title: Atmel SAM GPIO PORT driver
-version: 0.1
+# Copyright (c) 2021-2023, Gerson Fernando Budke <nandojve@gmail.com>
+# SPDX-License-Identifier: Apache-2.0
 
-description: >
-    This is a representation of the SAM GPIO PORT nodes
+description: SAM GPIO PORT node
+
+compatible: "atmel,sam-gpio"
+
+include: [gpio-controller.yaml, base.yaml]
 
 properties:
-    compatible:
-      type: string
-      category: required
-      description: compatible strings
-      constraint: "atmel,sam-gpio"
-      generation: define
+  reg:
+    required: true
 
-    reg:
-      type: int
-      description: mmio register space
-      generation: define
-      category: required
+  interrupts:
+    required: true
 
-    interrupts:
-      type: compound
-      category: required
-      description: required interrupts
-      generation: define
+  clocks:
+    required: true
 
-    label:
-      type: string
-      category: required
-      description: Human readable string describing the device (used by Zephyr for API name)
-      generation: define
+  "#gpio-cells":
+    const: 2
 
-    peripheral-id:
-      type: int
-      description: peripheral ID
-      generation: define
-      category: required
+  "#atmel,pin-cells":
+    type: int
+    required: true
+    const: 2
+    description: Number of items to expect in a atmel,pins specifier
 
-"#cells":
+
+gpio-cells:
   - pin
   - flags
-...
+
+atmel,pin-cells:
+  - pin
+  - peripheral

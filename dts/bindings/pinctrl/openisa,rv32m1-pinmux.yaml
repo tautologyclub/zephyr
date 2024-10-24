@@ -1,31 +1,16 @@
----
-title: RV32M1 Pinmux
-version: 0.1
+description: RV32M1 pinmux node
 
-description: >
-    This is a representation of the RV32M1 Pinmux node
+compatible: "openisa,rv32m1-pinmux"
+
+include: base.yaml
 
 properties:
-    compatible:
-      type: string
-      category: required
-      description: compatible strings
-      constraint: "openisa,rv32m1-pinmux"
-      generation: define
+  reg:
+    required: true
 
-    reg:
-      type: int
-      description: mmio register space
-      generation: define
-      category: required
+  clocks:
+    required: true
 
-    clocks:
-      type: array
-      description: clock gate information
-      generation: define
-      category: required
-
-"#cells":
+pinmux-cells:
   - pin
   - function
-...

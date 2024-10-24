@@ -1,5 +1,9 @@
 tests:
-  usb.device.dfu:
-    depends_on: usb_device
-    platform_whitelist: nrf52840_pca10056
+  dfu.mcuboot:
+    platform_allow:
+      - nrf52840dk/nrf52840
+      - native_sim
+      - native_sim/native/64
     tags: dfu_mcuboot
+    integration_platforms:
+      - nrf52840dk/nrf52840

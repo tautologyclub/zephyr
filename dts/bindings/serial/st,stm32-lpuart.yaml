@@ -1,32 +1,5 @@
----
-title: STM32 LPUART
-version: 0.1
+description: STM32 LPUART
 
-description: >
-    This binding gives a base representation of the STM32 LPUART
+compatible: "st,stm32-lpuart"
 
-inherits:
-    !include uart.yaml
-
-properties:
-    compatible:
-      constraint: "st,stm32-lpuart"
-
-    reg:
-      type: array
-      description: mmio register space
-      generation: define
-      category: required
-
-    interrupts:
-      type: array
-      category: required
-      description: required interrupts
-      generation: define
-
-    clocks:
-      type: array
-      category: required
-      description: Clock gate information
-      generation: define
-...
+include: st,stm32-uart-base.yaml

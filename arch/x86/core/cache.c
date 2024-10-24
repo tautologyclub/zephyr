@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2013-2014 Wind River Systems, Inc.
+ * Copyright (c) 2021 Intel Corporation
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -10,95 +11,115 @@
  * This module contains functions for manipulation caches.
  */
 
-#include <kernel.h>
-#include <arch/cpu.h>
-#include <misc/util.h>
-#include <toolchain.h>
-#include <cache.h>
-#include <cache_private.h>
+#include <zephyr/kernel.h>
+#include <zephyr/arch/cpu.h>
+#include <zephyr/sys/util.h>
+#include <zephyr/toolchain.h>
+#include <zephyr/cache.h>
 #include <stdbool.h>
 
-#if defined(CONFIG_CLFLUSH_INSTRUCTION_SUPPORTED) || \
-	defined(CONFIG_CLFLUSH_DETECT)
+/* Not Write-through bit */
+#define X86_REG_CR0_NW BIT(29)
+/* Cache Disable bit */
+#define X86_REG_CR0_CD BIT(30)
 
-#if (CONFIG_CACHE_LINE_SIZE == 0) && !defined(CONFIG_CACHE_LINE_SIZE_DETECT)
-#error Cannot use this implementation with a cache line size of 0
-#endif
-
-/**
- *
- * @brief Flush cache lines to main memory
- *
- * No alignment is required for either <virt> or <size>, but since
- * sys_cache_flush() iterates on the cache lines, a cache line alignment for
- * both is optimal.
- *
- * The cache line size is specified either via the CONFIG_CACHE_LINE_SIZE
- * kconfig option or it is detected at runtime.
- *
- * @return N/A
- */
-
-_sys_cache_flush_sig(_cache_flush_clflush)
+static inline void z_x86_wbinvd(void)
 {
-	int end;
-
-	size = ROUND_UP(size, sys_cache_line_size);
-	end = virt + size;
-
-	for (; virt < end; virt += sys_cache_line_size) {
-		__asm__ volatile("clflush %0;\n\t" :  : "m"(virt));
-	}
-
-	__asm__ volatile("mfence;\n\t");
+	__asm__ volatile("wbinvd;\n\t" : : : "memory");
 }
 
-#endif /* CONFIG_CLFLUSH_INSTRUCTION_SUPPORTED || CLFLUSH_DETECT */
-
-#if defined(CONFIG_CLFLUSH_DETECT) || defined(CONFIG_CACHE_LINE_SIZE_DETECT)
-
-#include <init.h>
-
-#if defined(CONFIG_CLFLUSH_DETECT)
-_sys_cache_flush_t *sys_cache_flush;
-static void init_cache_flush(void)
+void arch_dcache_enable(void)
 {
-	if (z_is_clflush_available()) {
-		sys_cache_flush = _cache_flush_clflush;
-	} else {
-		sys_cache_flush = z_cache_flush_wbinvd;
-	}
+	unsigned long cr0 = 0;
+
+	/* Enable write-back caching by clearing the NW and CD bits */
+	__asm__ volatile("mov %%cr0, %0;\n\t"
+			 "and %1, %0;\n\t"
+			 "mov %0, %%cr0;\n\t"
+			 : "=r" (cr0)
+			 : "i" (~(X86_REG_CR0_NW | X86_REG_CR0_CD)));
 }
-#else
-#define init_cache_flush() do { } while (false)
 
-#if defined(CONFIG_CLFLUSH_INSTRUCTION_SUPPORTED)
-FUNC_ALIAS(_cache_flush_clflush, sys_cache_flush, void);
-#endif
-
-#endif /* CONFIG_CLFLUSH_DETECT */
-
-
-#if defined(CONFIG_CACHE_LINE_SIZE_DETECT)
-size_t sys_cache_line_size;
-static void init_cache_line_size(void)
+void arch_dcache_disable(void)
 {
-	sys_cache_line_size = z_cache_line_size_get();
+	unsigned long cr0 = 0;
+
+	/* Enter the no-fill mode by setting NW=0 and CD=1 */
+	__asm__ volatile("mov %%cr0, %0;\n\t"
+			 "and %1, %0;\n\t"
+			 "or %2, %0;\n\t"
+			 "mov %0, %%cr0;\n\t"
+			 : "=r" (cr0)
+			 : "i" (~(X86_REG_CR0_NW)),
+			   "i" (X86_REG_CR0_CD));
+
+	/* Flush all caches */
+	z_x86_wbinvd();
 }
-#else
-#define init_cache_line_size() do { } while ((0))
-#endif
 
-static int init_cache(struct device *unused)
+int arch_dcache_flush_all(void)
 {
-	ARG_UNUSED(unused);
-
-	init_cache_flush();
-	init_cache_line_size();
+	z_x86_wbinvd();
 
 	return 0;
 }
 
-SYS_INIT(init_cache, PRE_KERNEL_1, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT);
+int arch_dcache_invd_all(void)
+{
+	z_x86_wbinvd();
 
-#endif /* CONFIG_CLFLUSH_DETECT || CONFIG_CACHE_LINE_SIZE_DETECT */
+	return 0;
+}
+
+int arch_dcache_flush_and_invd_all(void)
+{
+	z_x86_wbinvd();
+
+	return 0;
+}
+
+/**
+ * No alignment is required for either <virt> or <size>, but since
+ * sys_cache_flush() iterates on the cache lines, a cache line alignment for
+ * both is optimal.
+ *
+ * The cache line size is specified via the d-cache-line-size DTS property.
+ */
+int arch_dcache_flush_range(void *start_addr, size_t size)
+{
+	size_t line_size = sys_cache_data_line_size_get();
+	uintptr_t start = (uintptr_t)start_addr;
+	uintptr_t end = start + size;
+
+	if (line_size == 0U) {
+		return -ENOTSUP;
+	}
+
+	end = ROUND_UP(end, line_size);
+
+	for (; start < end; start += line_size) {
+		__asm__ volatile("clflush %0;\n\t" :
+				"+m"(*(volatile char *)start));
+	}
+
+#if defined(CONFIG_X86_MFENCE_INSTRUCTION_SUPPORTED)
+	__asm__ volatile("mfence;\n\t":::"memory");
+#else
+	__asm__ volatile("lock; addl $0,-4(%%esp);\n\t":::"memory", "cc");
+#endif
+	return 0;
+}
+
+int arch_dcache_invd_range(void *start_addr, size_t size)
+{
+	return arch_dcache_flush_range(start_addr, size);
+}
+
+int arch_dcache_flush_and_invd_range(void *start_addr, size_t size)
+{
+	return arch_dcache_flush_range(start_addr, size);
+}
+
+void arch_cache_init(void)
+{
+}

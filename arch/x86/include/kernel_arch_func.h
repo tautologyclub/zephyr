@@ -1,136 +1,113 @@
 /*
- * Copyright (c) 2016 Wind River Systems, Inc.
- * Copyright (c) 2018 Intel Corporation
- *
+ * Copyright (c) 2019 Intel Corporation
  * SPDX-License-Identifier: Apache-2.0
  */
-
-/* this file is only meant to be included by kernel_structs.h */
 
 #ifndef ZEPHYR_ARCH_X86_INCLUDE_KERNEL_ARCH_FUNC_H_
 #define ZEPHYR_ARCH_X86_INCLUDE_KERNEL_ARCH_FUNC_H_
 
+#include <kernel_arch_data.h>
+#include <zephyr/arch/x86/mmustructs.h>
+
+#ifdef CONFIG_X86_64
+#include <intel64/kernel_arch_func.h>
+#else
+#include <ia32/kernel_arch_func.h>
+#endif
+
 #ifndef _ASMLANGUAGE
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-/* stack alignment related macros: STACK_ALIGN_SIZE is defined above */
-
-#define STACK_ROUND_UP(x) ROUND_UP(x, STACK_ALIGN_SIZE)
-#define STACK_ROUND_DOWN(x) ROUND_DOWN(x, STACK_ALIGN_SIZE)
-
-extern K_THREAD_STACK_DEFINE(_interrupt_stack, CONFIG_ISR_STACK_SIZE);
-
-/**
- *
- * @brief Performs architecture-specific initialization
- *
- * This routine performs architecture-specific initialization of the kernel.
- * Trivial stuff is done inline; more complex initialization is done via
- * function calls.
- *
- * @return N/A
- */
-static inline void kernel_arch_init(void)
+static inline bool arch_is_in_isr(void)
 {
-	_kernel.nested = 0;
-	_kernel.irq_stack = Z_THREAD_STACK_BUFFER(_interrupt_stack) +
-				CONFIG_ISR_STACK_SIZE;
-#if CONFIG_X86_STACK_PROTECTION
-	z_x86_mmu_set_flags(&z_x86_kernel_pdpt, _interrupt_stack, MMU_PAGE_SIZE,
-			   MMU_ENTRY_NOT_PRESENT, MMU_PTE_P_MASK);
-#endif
-}
+#ifdef CONFIG_SMP
+	/* On SMP, there is a race vs. the current CPU changing if we
+	 * are preempted.  Need to mask interrupts while inspecting
+	 * (note deliberate lack of gcc size suffix on the
+	 * instructions, we need to work with both architectures here)
+	 */
+	bool ret;
 
-/**
- *
- * @brief Set the return value for the specified thread (inline)
- *
- * @param thread pointer to thread
- * @param value value to set as return value
- *
- * The register used to store the return value from a function call invocation
- * is set to @a value.  It is assumed that the specified @a thread is pending, and
- * thus the threads context is stored in its TCS.
- *
- * @return N/A
- */
-static ALWAYS_INLINE void
-z_set_thread_return_value(struct k_thread *thread, unsigned int value)
-{
-	/* write into 'eax' slot created in z_swap() entry */
-
-	*(unsigned int *)(thread->callee_saved.esp) = value;
-}
-
-extern void k_cpu_atomic_idle(unsigned int key);
-
-/**
- * @brief Write to a model specific register (MSR)
- *
- * This function is used to write to an MSR.
- *
- * The definitions of the so-called  "Architectural MSRs" are contained
- * in kernel_structs.h and have the format: IA32_XXX_MSR
- *
- * @return N/A
- */
-static inline void z_x86_msr_write(unsigned int msr, u64_t data)
-{
-	u32_t high = data >> 32;
-	u32_t low = data & 0xFFFFFFFF;
-
-	__asm__ volatile ("wrmsr" : : "c"(msr), "a"(low), "d"(high));
-}
-
-/**
- * @brief Read from a model specific register (MSR)
- *
- * This function is used to read from an MSR.
- *
- * The definitions of the so-called  "Architectural MSRs" are contained
- * in kernel_structs.h and have the format: IA32_XXX_MSR
- *
- * @return N/A
- */
-static inline u64_t z_x86_msr_read(unsigned int msr)
-{
-	u64_t ret;
-
-	__asm__ volatile("rdmsr" : "=A" (ret) : "c" (msr));
-
+	__asm__ volatile ("pushf; cli");
+	ret = arch_curr_cpu()->nested != 0;
+	__asm__ volatile ("popf");
 	return ret;
-}
-
-#ifdef CONFIG_JAILHOUSE_X2APIC
-#define MSR_X2APIC_BASE 0x00000800
-
-static inline u32_t read_x2apic(unsigned int reg)
-{
-	return z_x86_msr_read(MSR_X2APIC_BASE + reg);
-}
-
-static inline void write_x2apic(unsigned int reg, u32_t val)
-{
-	z_x86_msr_write(MSR_X2APIC_BASE + reg, val);
-}
+#else
+	return _kernel.cpus[0].nested != 0U;
 #endif
+}
 
+struct multiboot_info;
+
+extern FUNC_NORETURN void z_prep_c(void *arg);
+
+#ifdef CONFIG_X86_VERY_EARLY_CONSOLE
+/* Setup ultra-minimal serial driver for printk() */
+void z_x86_early_serial_init(void);
+#endif /* CONFIG_X86_VERY_EARLY_CONSOLE */
+
+
+/* Called upon CPU exception that is unhandled and hence fatal; dump
+ * interesting info and call z_x86_fatal_error()
+ */
+FUNC_NORETURN void z_x86_unhandled_cpu_exception(uintptr_t vector,
+						 const struct arch_esf *esf);
+
+/* Called upon unrecoverable error; dump registers and transfer control to
+ * kernel via z_fatal_error()
+ */
+FUNC_NORETURN void z_x86_fatal_error(unsigned int reason,
+				     const struct arch_esf *esf);
+
+/* Common handling for page fault exceptions */
+void z_x86_page_fault_handler(struct arch_esf *esf);
+
+#ifdef CONFIG_THREAD_STACK_INFO
+/**
+ * @brief Check if a memory address range falls within the stack
+ *
+ * Given a memory address range, ensure that it falls within the bounds
+ * of the faulting context's stack.
+ *
+ * @param addr Starting address
+ * @param size Size of the region, or 0 if we just want to see if addr is
+ *             in bounds
+ * @param cs Code segment of faulting context
+ * @return true if addr/size region is not within the thread stack
+ */
+bool z_x86_check_stack_bounds(uintptr_t addr, size_t size, uint16_t cs);
+#endif /* CONFIG_THREAD_STACK_INFO */
+
+#ifdef CONFIG_USERSPACE
 extern FUNC_NORETURN void z_x86_userspace_enter(k_thread_entry_t user_entry,
 					       void *p1, void *p2, void *p3,
-					       u32_t stack_end,
-					       u32_t stack_start);
+					       uintptr_t stack_end,
+					       uintptr_t stack_start);
 
-#include <stddef.h> /* For size_t */
+/* Preparation steps needed for all threads if user mode is turned on.
+ *
+ * Returns the initial entry point to swap into.
+ */
+void *z_x86_userspace_prepare_thread(struct k_thread *thread);
 
-#ifdef __cplusplus
-}
-#endif
+#endif /* CONFIG_USERSPACE */
 
-#define z_is_in_isr() (_kernel.nested != 0U)
+void z_x86_do_kernel_oops(const struct arch_esf *esf);
 
-#endif /* _ASMLANGUAGE */
+/*
+ * Find a free IRQ vector at the specified priority, or return -1 if none left.
+ * For multiple vector allocated one after another, prev_vector can be used to
+ * speed up the allocation: it only needs to be filled with the previous
+ * allocated vector, or -1 to start over.
+ */
+int z_x86_allocate_vector(unsigned int priority, int prev_vector);
+
+/*
+ * Connect a vector
+ */
+void z_x86_irq_connect_on_vector(unsigned int irq,
+				 uint8_t vector,
+				 void (*func)(const void *arg),
+				 const void *arg);
+
+#endif /* !_ASMLANGUAGE */
 
 #endif /* ZEPHYR_ARCH_X86_INCLUDE_KERNEL_ARCH_FUNC_H_ */

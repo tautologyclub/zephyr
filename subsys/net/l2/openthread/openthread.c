@@ -4,59 +4,159 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(net_l2_openthread, CONFIG_OPENTHREAD_L2_LOG_LEVEL);
 
-#include <net/net_core.h>
-#include <net/net_pkt.h>
-#include <net/net_mgmt.h>
-#include <net/openthread.h>
+#include <zephyr/net/net_core.h>
+#include <zephyr/net/net_pkt.h>
+#include <zephyr/net/net_mgmt.h>
+#include <zephyr/net/openthread.h>
 
 #include <net_private.h>
 
-#include <init.h>
-#include <misc/util.h>
-#include <misc/__assert.h>
+#include <zephyr/init.h>
+#include <zephyr/sys/check.h>
+#include <zephyr/sys/slist.h>
+#include <zephyr/sys/util.h>
+#include <zephyr/sys/__assert.h>
+#include <zephyr/version.h>
 
 #include <openthread/cli.h>
 #include <openthread/ip6.h>
 #include <openthread/link.h>
+#include <openthread/link_raw.h>
+#include <openthread/ncp.h>
 #include <openthread/message.h>
+#include <openthread/platform/diag.h>
 #include <openthread/tasklet.h>
 #include <openthread/thread.h>
 #include <openthread/dataset.h>
 #include <openthread/joiner.h>
 #include <openthread-system.h>
-#include <openthread-config-generic.h>
+#include <utils/uart.h>
 
 #include <platform-zephyr.h>
 
 #include "openthread_utils.h"
 
+#if defined(CONFIG_OPENTHREAD_NAT64_TRANSLATOR)
+#include <openthread/nat64.h>
+#endif  /* CONFIG_OPENTHREAD_NAT64_TRANSLATOR */
+
+#define PKT_IS_IPv4(_p) ((NET_IPV6_HDR(_p)->vtc & 0xf0) == 0x40)
+
 #define OT_STACK_SIZE (CONFIG_OPENTHREAD_THREAD_STACK_SIZE)
+
+#if defined(CONFIG_OPENTHREAD_THREAD_PREEMPTIVE)
+#define OT_PRIORITY K_PRIO_PREEMPT(CONFIG_OPENTHREAD_THREAD_PRIORITY)
+#else
 #define OT_PRIORITY K_PRIO_COOP(CONFIG_OPENTHREAD_THREAD_PRIORITY)
+#endif
+
+#if defined(CONFIG_OPENTHREAD_NETWORK_NAME)
+#define OT_NETWORK_NAME CONFIG_OPENTHREAD_NETWORK_NAME
+#else
+#define OT_NETWORK_NAME ""
+#endif
+
+#if defined(CONFIG_OPENTHREAD_CHANNEL)
+#define OT_CHANNEL CONFIG_OPENTHREAD_CHANNEL
+#else
+#define OT_CHANNEL 0
+#endif
+
+#if defined(CONFIG_OPENTHREAD_PANID)
+#define OT_PANID CONFIG_OPENTHREAD_PANID
+#else
+#define OT_PANID 0
+#endif
+
+#if defined(CONFIG_OPENTHREAD_XPANID)
+#define OT_XPANID CONFIG_OPENTHREAD_XPANID
+#else
+#define OT_XPANID ""
+#endif
+
+#if defined(CONFIG_OPENTHREAD_NETWORKKEY)
+#define OT_NETWORKKEY CONFIG_OPENTHREAD_NETWORKKEY
+#else
+#define OT_NETWORKKEY ""
+#endif
+
+#if defined(CONFIG_OPENTHREAD_JOINER_PSKD)
+#define OT_JOINER_PSKD CONFIG_OPENTHREAD_JOINER_PSKD
+#else
+#define OT_JOINER_PSKD ""
+#endif
+
+#if defined(CONFIG_OPENTHREAD_PLATFORM_INFO)
+#define OT_PLATFORM_INFO CONFIG_OPENTHREAD_PLATFORM_INFO
+#else
+#define OT_PLATFORM_INFO ""
+#endif
+
+#if defined(CONFIG_OPENTHREAD_POLL_PERIOD)
+#define OT_POLL_PERIOD CONFIG_OPENTHREAD_POLL_PERIOD
+#else
+#define OT_POLL_PERIOD 0
+#endif
+
+#define PACKAGE_NAME "Zephyr"
+#define PACKAGE_VERSION KERNEL_VERSION_STRING
 
 extern void platformShellInit(otInstance *aInstance);
 
-K_SEM_DEFINE(ot_sem, 0, 1);
+K_KERNEL_STACK_DEFINE(ot_stack_area, OT_STACK_SIZE);
 
-K_THREAD_STACK_DEFINE(ot_stack_area, OT_STACK_SIZE);
-static struct k_thread ot_thread_data;
-static k_tid_t ot_tid;
 static struct net_linkaddr *ll_addr;
+static otStateChangedCallback state_changed_cb;
 
+k_tid_t openthread_thread_id_get(void)
+{
+	struct openthread_context *ot_context = openthread_get_default_context();
+
+	return ot_context ? (k_tid_t)&ot_context->work_q.thread : 0;
+}
+
+#ifdef CONFIG_NET_MGMT_EVENT
 static struct net_mgmt_event_callback ip6_addr_cb;
 
 static void ipv6_addr_event_handler(struct net_mgmt_event_callback *cb,
-				    u32_t mgmt_event, struct net_if *iface)
+				    uint32_t mgmt_event, struct net_if *iface)
 {
+	if (net_if_l2(iface) != &NET_L2_GET_NAME(OPENTHREAD)) {
+		return;
+	}
+
+#ifdef CONFIG_NET_MGMT_EVENT_INFO
 	struct openthread_context *ot_context = net_if_l2_data(iface);
 
-	if (mgmt_event == NET_EVENT_IPV6_ADDR_ADD) {
-		add_ipv6_addr_to_ot(ot_context);
-	} else if (mgmt_event == NET_EVENT_IPV6_MADDR_ADD) {
-		add_ipv6_maddr_to_ot(ot_context);
+	if (cb->info == NULL || cb->info_length != sizeof(struct in6_addr)) {
+		return;
 	}
+
+	if (mgmt_event == NET_EVENT_IPV6_ADDR_ADD) {
+		add_ipv6_addr_to_ot(ot_context, (const struct in6_addr *)cb->info);
+	} else if (mgmt_event == NET_EVENT_IPV6_MADDR_ADD) {
+		add_ipv6_maddr_to_ot(ot_context, (const struct in6_addr *)cb->info);
+	}
+#else
+	NET_WARN("No address info provided with event, "
+		 "please enable CONFIG_NET_MGMT_EVENT_INFO");
+#endif /* CONFIG_NET_MGMT_EVENT_INFO */
+}
+#endif /* CONFIG_NET_MGMT_EVENT */
+
+static int ncp_hdlc_send(const uint8_t *buf, uint16_t len)
+{
+	otError err;
+
+	err = otPlatUartSend(buf, len);
+	if (err != OT_ERROR_NONE) {
+		return 0;
+	}
+
+	return len;
 }
 
 void otPlatRadioGetIeeeEui64(otInstance *instance, uint8_t *ieee_eui64)
@@ -68,20 +168,43 @@ void otPlatRadioGetIeeeEui64(otInstance *instance, uint8_t *ieee_eui64)
 
 void otTaskletsSignalPending(otInstance *instance)
 {
-	k_sem_give(&ot_sem);
+	struct openthread_context *ot_context = openthread_get_default_context();
+
+	if (ot_context) {
+		k_work_submit_to_queue(&ot_context->work_q, &ot_context->api_work);
+	}
 }
 
 void otSysEventSignalPending(void)
 {
-	k_sem_give(&ot_sem);
+	otTaskletsSignalPending(NULL);
 }
 
-void ot_state_changed_handler(uint32_t flags, void *context)
+static void ot_state_changed_handler(uint32_t flags, void *context)
 {
+	struct openthread_state_changed_cb *entry, *next;
 	struct openthread_context *ot_context = context;
 
-	NET_INFO("State changed! Flags: 0x%08" PRIx32 " Current role: %d",
-		    flags, otThreadGetDeviceRole(ot_context->instance));
+	NET_INFO("State changed! Flags: 0x%08" PRIx32 " Current role: %s",
+		flags,
+		otThreadDeviceRoleToString(otThreadGetDeviceRole(ot_context->instance))
+		);
+
+	if (flags & OT_CHANGED_THREAD_ROLE) {
+		switch (otThreadGetDeviceRole(ot_context->instance)) {
+		case OT_DEVICE_ROLE_CHILD:
+		case OT_DEVICE_ROLE_ROUTER:
+		case OT_DEVICE_ROLE_LEADER:
+			net_if_dormant_off(ot_context->iface);
+			break;
+
+		case OT_DEVICE_ROLE_DISABLED:
+		case OT_DEVICE_ROLE_DETACHED:
+		default:
+			net_if_dormant_on(ot_context->iface);
+			break;
+		}
+	}
 
 	if (flags & OT_CHANGED_IP6_ADDRESS_REMOVED) {
 		NET_DBG("Ipv6 address removed");
@@ -93,23 +216,42 @@ void ot_state_changed_handler(uint32_t flags, void *context)
 		add_ipv6_addr_to_zephyr(ot_context);
 	}
 
-	if (flags & OT_CHANGED_IP6_MULTICAST_UNSUBSRCRIBED) {
+	if (flags & OT_CHANGED_IP6_MULTICAST_UNSUBSCRIBED) {
 		NET_DBG("Ipv6 multicast address removed");
 		rm_ipv6_maddr_from_zephyr(ot_context);
 	}
 
-	if (flags & OT_CHANGED_IP6_MULTICAST_SUBSRCRIBED) {
+	if (flags & OT_CHANGED_IP6_MULTICAST_SUBSCRIBED) {
 		NET_DBG("Ipv6 multicast address added");
 		add_ipv6_maddr_to_zephyr(ot_context);
 	}
+
+#if defined(CONFIG_OPENTHREAD_NAT64_TRANSLATOR)
+
+	if (flags & OT_CHANGED_NAT64_TRANSLATOR_STATE) {
+		NET_DBG("Nat64 translator state changed to %x",
+			otNat64GetTranslatorState(ot_context->instance));
+	}
+
+#endif /* CONFIG_OPENTHREAD_NAT64_TRANSLATOR */
+
+	if (state_changed_cb) {
+		state_changed_cb(flags, context);
+	}
+
+	SYS_SLIST_FOR_EACH_CONTAINER_SAFE(&ot_context->state_change_cbs, entry, next, node) {
+		if (entry->state_changed_cb != NULL) {
+			entry->state_changed_cb(flags, ot_context, entry->user_data);
+		}
+	}
 }
 
-void ot_receive_handler(otMessage *aMessage, void *context)
+static void ot_receive_handler(otMessage *aMessage, void *context)
 {
 	struct openthread_context *ot_context = context;
 
-	u16_t offset = 0U;
-	u16_t read_len;
+	uint16_t offset = 0U;
+	uint16_t read_len;
 	struct net_pkt *pkt;
 	struct net_buf *pkt_buf;
 
@@ -124,9 +266,7 @@ void ot_receive_handler(otMessage *aMessage, void *context)
 	pkt_buf = pkt->buffer;
 
 	while (1) {
-		read_len = otMessageRead(aMessage,
-					 offset,
-					 pkt_buf->data,
+		read_len = otMessageRead(aMessage, offset, pkt_buf->data,
 					 net_buf_tailroom(pkt_buf));
 		if (!read_len) {
 			break;
@@ -144,22 +284,32 @@ void ot_receive_handler(otMessage *aMessage, void *context)
 		}
 	}
 
-	NET_DBG("Injecting Ip6 packet to Zephyr net stack");
+	NET_DBG("Injecting %s packet to Zephyr net stack",
+		PKT_IS_IPv4(pkt) ? "translated IPv4" : "Ip6");
 
-#if defined(CONFIG_OPENTHREAD_L2_DEBUG_DUMP_IPV6)
-	net_pkt_hexdump(pkt, "Received IPv6 packet");
-#endif
+	if (IS_ENABLED(CONFIG_OPENTHREAD_L2_DEBUG_DUMP_IPV6)) {
+		if (IS_ENABLED(CONFIG_OPENTHREAD_NAT64_TRANSLATOR) && PKT_IS_IPv4(pkt)) {
+			net_pkt_hexdump(pkt, "Received NAT64 IPv4 packet");
+		} else {
+			net_pkt_hexdump(pkt, "Received IPv6 packet");
+		}
+	}
 
 	if (!pkt_list_is_full(ot_context)) {
-		if (net_recv_data(ot_context->iface, pkt) < 0) {
-			NET_ERR("net_recv_data failed");
+		if (pkt_list_add(ot_context, pkt) != 0) {
+			NET_ERR("pkt_list_add failed");
 			goto out;
 		}
 
-		pkt_list_add(ot_context, pkt);
+		if (net_recv_data(ot_context->iface, pkt) < 0) {
+			NET_ERR("net_recv_data failed");
+			pkt_list_remove_first(ot_context);
+			goto out;
+		}
+
 		pkt = NULL;
 	} else {
-		NET_INFO("Pacet list is full");
+		NET_INFO("Packet list is full");
 	}
 out:
 	if (pkt) {
@@ -169,7 +319,7 @@ out:
 	otMessageFree(aMessage);
 }
 
-void ot_joiner_start_handler(otError error, void *context)
+static void ot_joiner_start_handler(otError error, void *context)
 {
 	struct openthread_context *ot_context = context;
 
@@ -184,149 +334,206 @@ void ot_joiner_start_handler(otError error, void *context)
 	}
 }
 
-static void openthread_process(void *context, void *arg2, void *arg3)
+static void openthread_process(struct k_work *work)
 {
-	struct openthread_context *ot_context = context;
+	struct openthread_context *ot_context
+		= CONTAINER_OF(work, struct openthread_context, api_work);
 
-	while (1) {
-		while (otTaskletsArePending(ot_context->instance)) {
-			otTaskletsProcess(ot_context->instance);
-		}
+	openthread_api_mutex_lock(ot_context);
 
-		otSysProcessDrivers(ot_context->instance);
-
-		k_sem_take(&ot_sem, K_FOREVER);
+	while (otTaskletsArePending(ot_context->instance)) {
+		otTaskletsProcess(ot_context->instance);
 	}
+
+	otSysProcessDrivers(ot_context->instance);
+
+	openthread_api_mutex_unlock(ot_context);
 }
 
-static enum net_verdict openthread_recv(struct net_if *iface,
-					struct net_pkt *pkt)
+static bool is_ipv6_frag(struct net_pkt *pkt)
+{
+	NET_PKT_DATA_ACCESS_CONTIGUOUS_DEFINE(ipv6_access, struct net_ipv6_hdr);
+	struct net_ipv6_hdr *hdr;
+
+	hdr = (struct net_ipv6_hdr *)net_pkt_get_data(pkt, &ipv6_access);
+	if (!hdr) {
+		return false;
+	}
+
+	return hdr->nexthdr == NET_IPV6_NEXTHDR_FRAG ? true : false;
+}
+
+static enum net_verdict openthread_recv(struct net_if *iface, struct net_pkt *pkt)
 {
 	struct openthread_context *ot_context = net_if_l2_data(iface);
 
 	if (pkt_list_peek(ot_context) == pkt) {
 		pkt_list_remove_last(ot_context);
-		NET_DBG("Got injected Ip6 packet, "
-			    "sending to upper layers");
-#if defined(CONFIG_OPENTHREAD_L2_DEBUG_DUMP_IPV6)
-		net_pkt_hexdump(pkt, "Injected IPv6 packet");
-#endif
+		NET_DBG("Got injected Ip6 packet, sending to upper layers");
+
+		if (IS_ENABLED(CONFIG_OPENTHREAD_L2_DEBUG_DUMP_IPV6)) {
+			net_pkt_hexdump(pkt, "Injected IPv6 packet");
+		}
+
+		if (IS_ENABLED(CONFIG_OPENTHREAD_IP6_FRAGM) && is_ipv6_frag(pkt)) {
+			return NET_DROP;
+		}
+
 		return NET_CONTINUE;
 	}
 
 	NET_DBG("Got 802.15.4 packet, sending to OT");
 
-	otRadioFrame recv_frame;
-
-	recv_frame.mPsdu = net_buf_frag_last(pkt->buffer)->data;
-	/* Length inc. CRC. */
-	recv_frame.mLength = net_buf_frags_len(pkt->buffer);
-	recv_frame.mChannel = platformRadioChannelGet(ot_context->instance);
-	recv_frame.mInfo.mRxInfo.mLqi = net_pkt_ieee802154_lqi(pkt);
-	recv_frame.mInfo.mRxInfo.mRssi = net_pkt_ieee802154_rssi(pkt);
-
-#if defined(CONFIG_OPENTHREAD_L2_DEBUG_DUMP_15_4)
-	net_pkt_hexdump(pkt, "Received 802.15.4 frame");
-#endif
-
-#if OPENTHREAD_ENABLE_DIAG
-	if (otPlatDiagModeGet()) {
-		otPlatDiagRadioReceiveDone(ot_context->instance,
-					   &recv_frame, OT_ERROR_NONE);
-	} else
-#endif
-	{
-		otPlatRadioReceiveDone(ot_context->instance,
-				       &recv_frame, OT_ERROR_NONE);
+	if (IS_ENABLED(CONFIG_OPENTHREAD_L2_DEBUG_DUMP_IPV6)) {
+		net_pkt_hexdump(pkt, "Received 802.15.4 frame");
 	}
 
-	net_pkt_unref(pkt);
+	if (notify_new_rx_frame(pkt) != 0) {
+		NET_ERR("Failed to queue RX packet for OpenThread");
+		return NET_DROP;
+	}
 
 	return NET_OK;
 }
 
 int openthread_send(struct net_if *iface, struct net_pkt *pkt)
 {
-	struct openthread_context *ot_context = net_if_l2_data(iface);
 	int len = net_pkt_get_len(pkt);
-	struct net_buf *buf;
-	otMessage *message;
-	otMessageSettings settings;
 
-	NET_DBG("Sending Ip6 packet to ot stack");
-
-	settings.mPriority = OT_MESSAGE_PRIORITY_NORMAL;
-	settings.mLinkSecurityEnabled = true;
-	message = otIp6NewMessage(ot_context->instance, &settings);
-	if (message == NULL) {
-		goto exit;
+	if (IS_ENABLED(CONFIG_OPENTHREAD_L2_DEBUG_DUMP_IPV6)) {
+		net_pkt_hexdump(pkt, "IPv6 packet to send");
 	}
 
-	for (buf = pkt->buffer; buf; buf = buf->frags) {
-		if (otMessageAppend(message, buf->data,
-				    buf->len) != OT_ERROR_NONE) {
+	net_capture_pkt(iface, pkt);
 
-			NET_ERR("Error while appending to otMessage");
-			otMessageFree(message);
-			goto exit;
-		}
+	if (notify_new_tx_frame(pkt) != 0) {
+		net_pkt_unref(pkt);
 	}
-
-	if (otIp6Send(ot_context->instance, message) != OT_ERROR_NONE) {
-		NET_ERR("Error while calling otIp6Send");
-		goto exit;
-	}
-
-#if defined(CONFIG_OPENTHREAD_L2_DEBUG_DUMP_IPV6)
-	net_pkt_hexdump(pkt, "Sent IPv6 packet");
-#endif
-
-exit:
-	net_pkt_unref(pkt);
 
 	return len;
 }
 
-enum net_verdict ieee802154_radio_handle_ack(struct net_if *iface,
-					     struct net_buf *buf)
+int openthread_start(struct openthread_context *ot_context)
 {
-	ARG_UNUSED(iface);
-	ARG_UNUSED(buf);
-	NET_DBG("");
+	otInstance *ot_instance = ot_context->instance;
+	otError error = OT_ERROR_NONE;
 
-	return NET_CONTINUE;
-}
+	openthread_api_mutex_lock(ot_context);
 
-#if defined(CONFIG_OPENTHREAD_JOINER_AUTOSTART)
-void openthread_joiner_autostart(struct net_if *iface)
-{
-	struct openthread_context *ot_context = net_if_l2_data(iface);
-	otError error;
+	NET_INFO("OpenThread version: %s", otGetVersionString());
 
-	if (!otDatasetIsCommissioned(ot_context->instance)) {
-		error = otJoinerStart(ot_context->instance,
-				CONFIG_OPENTHREAD_JOINER_PSKD, NULL,
-				PACKAGE_NAME, CONFIG_OPENTHREAD_PLATFORM_INFO,
-				PACKAGE_VERSION, NULL,
-				&ot_joiner_start_handler, ot_context);
+	if (IS_ENABLED(CONFIG_OPENTHREAD_COPROCESSOR)) {
+		NET_DBG("OpenThread co-processor.");
+		goto exit;
+	}
+
+	otIp6SetEnabled(ot_context->instance, true);
+
+	/* Sleepy End Device specific configuration. */
+	if (IS_ENABLED(CONFIG_OPENTHREAD_MTD_SED)) {
+		otLinkModeConfig ot_mode = otThreadGetLinkMode(ot_instance);
+
+		/* A SED should always attach the network as a SED to indicate
+		 * increased buffer requirement to a parent.
+		 */
+		ot_mode.mRxOnWhenIdle = false;
+
+		otThreadSetLinkMode(ot_context->instance, ot_mode);
+		otLinkSetPollPeriod(ot_context->instance, OT_POLL_PERIOD);
+	}
+
+	if (otDatasetIsCommissioned(ot_instance)) {
+		/* OpenThread already has dataset stored - skip the
+		 * configuration.
+		 */
+		NET_DBG("OpenThread already commissioned.");
+	} else if (IS_ENABLED(CONFIG_OPENTHREAD_JOINER_AUTOSTART)) {
+		/* No dataset - initiate network join procedure. */
+		NET_DBG("Starting OpenThread join procedure.");
+
+		error = otJoinerStart(ot_instance, OT_JOINER_PSKD, NULL,
+				      PACKAGE_NAME, OT_PLATFORM_INFO,
+				      PACKAGE_VERSION, NULL,
+				      &ot_joiner_start_handler, ot_context);
 
 		if (error != OT_ERROR_NONE) {
 			NET_ERR("Failed to start joiner [%d]", error);
 		}
+
+		goto exit;
 	} else {
-		otThreadSetEnabled(ot_context->instance, true);
+		/* No dataset - load the default configuration. */
+		NET_DBG("Loading OpenThread default configuration.");
+
+		otExtendedPanId xpanid;
+		otNetworkKey    networkKey;
+
+		otThreadSetNetworkName(ot_instance, OT_NETWORK_NAME);
+		otLinkSetChannel(ot_instance, OT_CHANNEL);
+		otLinkSetPanId(ot_instance, OT_PANID);
+		net_bytes_from_str(xpanid.m8, 8, (char *)OT_XPANID);
+		otThreadSetExtendedPanId(ot_instance, &xpanid);
+
+		if (strlen(OT_NETWORKKEY)) {
+			net_bytes_from_str(networkKey.m8, OT_NETWORK_KEY_SIZE,
+					   (char *)OT_NETWORKKEY);
+			otThreadSetNetworkKey(ot_instance, &networkKey);
+		}
 	}
+
+	NET_INFO("Network name: %s",
+		 otThreadGetNetworkName(ot_instance));
+
+	/* Start the network. */
+	error = otThreadSetEnabled(ot_instance, true);
+	if (error != OT_ERROR_NONE) {
+		NET_ERR("Failed to start the OpenThread network [%d]", error);
+	}
+
+exit:
+
+	openthread_api_mutex_unlock(ot_context);
+
+	return error == OT_ERROR_NONE ? 0 : -EIO;
 }
-#endif
+
+int openthread_stop(struct openthread_context *ot_context)
+{
+	otError error;
+
+	if (IS_ENABLED(CONFIG_OPENTHREAD_COPROCESSOR)) {
+		return 0;
+	}
+
+	openthread_api_mutex_lock(ot_context);
+
+	error = otThreadSetEnabled(ot_context->instance, false);
+	if (error == OT_ERROR_INVALID_STATE) {
+		NET_DBG("Openthread interface was not up [%d]", error);
+	}
+
+	openthread_api_mutex_unlock(ot_context);
+
+	return 0;
+}
 
 static int openthread_init(struct net_if *iface)
 {
 	struct openthread_context *ot_context = net_if_l2_data(iface);
-	otExtendedPanId xpanid;
-
-	net_bytes_from_str(xpanid.m8, 8, (char *)CONFIG_OPENTHREAD_XPANID);
+	struct k_work_queue_config q_cfg = {
+		.name = "openthread",
+		.no_yield = true,
+	};
+	otError err;
 
 	NET_DBG("openthread_init");
+
+	k_mutex_init(&ot_context->api_lock);
+	k_work_init(&ot_context->api_work, openthread_process);
+
+	ll_addr = net_if_get_link_addr(iface);
+
+	openthread_api_mutex_lock(ot_context);
 
 	otSysInit(0, NULL);
 
@@ -335,63 +542,183 @@ static int openthread_init(struct net_if *iface)
 
 	__ASSERT(ot_context->instance, "OT instance is NULL");
 
-#if defined(CONFIG_OPENTHREAD_SHELL)
-	platformShellInit(ot_context->instance);
-#endif
+	if (IS_ENABLED(CONFIG_OPENTHREAD_SHELL)) {
+		platformShellInit(ot_context->instance);
+	}
 
-	NET_INFO("OpenThread version: %s",
-		    otGetVersionString());
+	if (IS_ENABLED(CONFIG_OPENTHREAD_COPROCESSOR)) {
+		otPlatUartEnable();
+		otNcpHdlcInit(ot_context->instance, ncp_hdlc_send);
+	} else {
+		otIp6SetReceiveFilterEnabled(ot_context->instance, true);
+		otIp6SetReceiveCallback(ot_context->instance,
+					ot_receive_handler, ot_context);
 
-#if !defined(CONFIG_OPENTHREAD_JOINER_AUTOSTART)
-	otThreadSetNetworkName(ot_context->instance, CONFIG_OPENTHREAD_NETWORK_NAME);
-	NET_INFO("Network name:   %s",
-		 log_strdup(otThreadGetNetworkName(ot_context->instance)));
+#if defined(CONFIG_OPENTHREAD_NAT64_TRANSLATOR)
 
-	otLinkSetChannel(ot_context->instance, CONFIG_OPENTHREAD_CHANNEL);
-	otLinkSetPanId(ot_context->instance, CONFIG_OPENTHREAD_PANID);
-	otThreadSetExtendedPanId(ot_context->instance, &xpanid);
-#endif
+		otIp4Cidr nat64_cidr;
 
-	otIp6SetEnabled(ot_context->instance, true);
+		if (otIp4CidrFromString(CONFIG_OPENTHREAD_NAT64_CIDR, &nat64_cidr) ==
+		    OT_ERROR_NONE) {
+			if (otNat64SetIp4Cidr(openthread_get_default_instance(), &nat64_cidr) !=
+			    OT_ERROR_NONE) {
+				NET_ERR("Incorrect NAT64 CIDR");
+			}
+		} else {
+			NET_ERR("Failed to parse NAT64 CIDR");
+		}
+		otNat64SetReceiveIp4Callback(ot_context->instance, ot_receive_handler, ot_context);
 
-	otIp6SetReceiveFilterEnabled(ot_context->instance, true);
-	otIp6SetReceiveCallback(ot_context->instance,
-				ot_receive_handler, ot_context);
-	otSetStateChangedCallback(ot_context->instance,
-				  &ot_state_changed_handler, ot_context);
+#endif /* CONFIG_OPENTHREAD_NAT64_TRANSLATOR */
 
-	ll_addr = net_if_get_link_addr(iface);
+		sys_slist_init(&ot_context->state_change_cbs);
+		err = otSetStateChangedCallback(ot_context->instance,
+						&ot_state_changed_handler,
+						ot_context);
+		if (err != OT_ERROR_NONE) {
+			NET_ERR("Could not set state changed callback: %d", err);
+		}
 
-	net_mgmt_init_event_callback(&ip6_addr_cb, ipv6_addr_event_handler,
-				     NET_EVENT_IPV6_ADDR_ADD |
-				     NET_EVENT_IPV6_MADDR_ADD);
-	net_mgmt_add_event_callback(&ip6_addr_cb);
+		net_mgmt_init_event_callback(
+			&ip6_addr_cb, ipv6_addr_event_handler,
+			NET_EVENT_IPV6_ADDR_ADD | NET_EVENT_IPV6_MADDR_ADD);
+		net_mgmt_add_event_callback(&ip6_addr_cb);
 
-	ot_tid = k_thread_create(&ot_thread_data, ot_stack_area,
-				 K_THREAD_STACK_SIZEOF(ot_stack_area),
-				 openthread_process,
-				 ot_context, NULL, NULL,
-				 OT_PRIORITY, 0, K_NO_WAIT);
-	k_thread_name_set(&ot_thread_data, "openthread");
+		net_if_dormant_on(iface);
+	}
 
-#if !defined(CONFIG_OPENTHREAD_JOINER_AUTOSTART)
-	otThreadSetEnabled(ot_context->instance, true);
-#else
-	openthread_joiner_autostart(iface);
-#endif
+	openthread_api_mutex_unlock(ot_context);
+
+	k_work_queue_start(&ot_context->work_q, ot_stack_area,
+			   K_KERNEL_STACK_SIZEOF(ot_stack_area),
+			   OT_PRIORITY, &q_cfg);
+
+	(void)k_work_submit_to_queue(&ot_context->work_q, &ot_context->api_work);
 
 	return 0;
 }
 
 void ieee802154_init(struct net_if *iface)
 {
+	if (IS_ENABLED(CONFIG_IEEE802154_NET_IF_NO_AUTO_START)) {
+		LOG_DBG("Interface auto start disabled.");
+		net_if_flag_set(iface, NET_IF_NO_AUTO_START);
+	}
+
+	net_if_flag_set(iface, NET_IF_IPV6_NO_ND);
+	net_if_flag_set(iface, NET_IF_IPV6_NO_MLD);
+
 	openthread_init(iface);
 }
 
 static enum net_l2_flags openthread_flags(struct net_if *iface)
 {
-	return NET_L2_MULTICAST;
+	/* TODO: Should report NET_L2_PROMISC_MODE if the radio driver
+	 *       reports the IEEE802154_HW_PROMISC capability.
+	 */
+	return NET_L2_MULTICAST | NET_L2_MULTICAST_SKIP_JOIN_SOLICIT_NODE;
 }
 
-NET_L2_INIT(OPENTHREAD_L2, openthread_recv, openthread_send,
-	    NULL, openthread_flags);
+static int openthread_enable(struct net_if *iface, bool state)
+{
+	struct openthread_context *ot_context = net_if_l2_data(iface);
+
+	NET_DBG("iface %p %s", iface, state ? "up" : "down");
+
+	if (state) {
+		if (IS_ENABLED(CONFIG_OPENTHREAD_MANUAL_START)) {
+			NET_DBG("OpenThread manual start.");
+			return 0;
+		}
+
+		return openthread_start(ot_context);
+	}
+
+	return openthread_stop(ot_context);
+}
+
+struct openthread_context *openthread_get_default_context(void)
+{
+	struct net_if *iface;
+	struct openthread_context *ot_context = NULL;
+
+	iface = net_if_get_first_by_type(&NET_L2_GET_NAME(OPENTHREAD));
+	if (!iface) {
+		NET_ERR("There is no net interface for OpenThread");
+		goto exit;
+	}
+
+	ot_context = net_if_l2_data(iface);
+	if (!ot_context) {
+		NET_ERR("There is no Openthread context in net interface data");
+		goto exit;
+	}
+
+exit:
+	return ot_context;
+}
+
+struct otInstance *openthread_get_default_instance(void)
+{
+	struct openthread_context *ot_context =
+		openthread_get_default_context();
+
+	return ot_context ? ot_context->instance : NULL;
+}
+
+int openthread_state_changed_cb_register(struct openthread_context *ot_context,
+					 struct openthread_state_changed_cb *cb)
+{
+	CHECKIF(cb == NULL || cb->state_changed_cb == NULL) {
+		return -EINVAL;
+	}
+
+	openthread_api_mutex_lock(ot_context);
+	sys_slist_append(&ot_context->state_change_cbs, &cb->node);
+	openthread_api_mutex_unlock(ot_context);
+
+	return 0;
+}
+
+int openthread_state_changed_cb_unregister(struct openthread_context *ot_context,
+					   struct openthread_state_changed_cb *cb)
+{
+	bool removed;
+
+	CHECKIF(cb == NULL) {
+		return -EINVAL;
+	}
+
+	openthread_api_mutex_lock(ot_context);
+	removed = sys_slist_find_and_remove(&ot_context->state_change_cbs, &cb->node);
+	openthread_api_mutex_unlock(ot_context);
+
+	if (!removed) {
+		return -EALREADY;
+	}
+
+	return 0;
+}
+
+void openthread_set_state_changed_cb(otStateChangedCallback cb)
+{
+	state_changed_cb = cb;
+}
+
+void openthread_api_mutex_lock(struct openthread_context *ot_context)
+{
+	(void)k_mutex_lock(&ot_context->api_lock, K_FOREVER);
+}
+
+int openthread_api_mutex_try_lock(struct openthread_context *ot_context)
+{
+	return k_mutex_lock(&ot_context->api_lock, K_NO_WAIT);
+}
+
+void openthread_api_mutex_unlock(struct openthread_context *ot_context)
+{
+	(void)k_mutex_unlock(&ot_context->api_lock);
+}
+
+NET_L2_INIT(OPENTHREAD_L2, openthread_recv, openthread_send, openthread_enable,
+	    openthread_flags);

@@ -6,22 +6,24 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_DECLARE(net_config, CONFIG_NET_CONFIG_LOG_LEVEL);
 
-#include <zephyr.h>
+#include <zephyr/kernel.h>
 #include <errno.h>
 
-#include <net/net_if.h>
-#include <net/net_core.h>
-#include <net/net_mgmt.h>
-#include <net/ieee802154_mgmt.h>
+#include <zephyr/net/net_if.h>
+#include <zephyr/net/net_core.h>
+#include <zephyr/net/net_mgmt.h>
+#include <zephyr/net/ieee802154_mgmt.h>
 
-int z_net_config_ieee802154_setup(void)
+int z_net_config_ieee802154_setup(struct net_if *iface)
 {
-	u16_t channel = CONFIG_NET_CONFIG_IEEE802154_CHANNEL;
-	u16_t pan_id = CONFIG_NET_CONFIG_IEEE802154_PAN_ID;
-	s16_t tx_power = CONFIG_NET_CONFIG_IEEE802154_RADIO_TX_POWER;
+	uint16_t channel = CONFIG_NET_CONFIG_IEEE802154_CHANNEL;
+	uint16_t pan_id = CONFIG_NET_CONFIG_IEEE802154_PAN_ID;
+	const struct device *const dev = iface == NULL ? DEVICE_DT_GET(DT_CHOSEN(zephyr_ieee802154))
+						       : net_if_get_device(iface);
+	int16_t tx_power = CONFIG_NET_CONFIG_IEEE802154_RADIO_TX_POWER;
 
 #ifdef CONFIG_NET_L2_IEEE802154_SECURITY
 	struct ieee802154_security_params sec_params = {
@@ -32,25 +34,29 @@ int z_net_config_ieee802154_setup(void)
 	};
 #endif /* CONFIG_NET_L2_IEEE802154_SECURITY */
 
-	struct net_if *iface;
-	struct device *dev;
-
-	dev = device_get_binding(CONFIG_NET_CONFIG_IEEE802154_DEV_NAME);
-	if (!dev) {
+	if (!device_is_ready(dev)) {
 		return -ENODEV;
 	}
 
-	iface = net_if_lookup_by_dev(dev);
 	if (!iface) {
-		return -EINVAL;
+		iface = net_if_lookup_by_dev(dev);
+		if (!iface) {
+			return -ENOENT;
+		}
+	}
+
+	if (IS_ENABLED(CONFIG_NET_CONFIG_IEEE802154_ACK_REQUIRED)) {
+		if (net_mgmt(NET_REQUEST_IEEE802154_SET_ACK, iface, NULL, 0)) {
+			return -EIO;
+		}
 	}
 
 	if (net_mgmt(NET_REQUEST_IEEE802154_SET_PAN_ID,
-		     iface, &pan_id, sizeof(u16_t)) ||
+		     iface, &pan_id, sizeof(uint16_t)) ||
 	    net_mgmt(NET_REQUEST_IEEE802154_SET_CHANNEL,
-		     iface, &channel, sizeof(u16_t)) ||
+		     iface, &channel, sizeof(uint16_t)) ||
 	    net_mgmt(NET_REQUEST_IEEE802154_SET_TX_POWER,
-		     iface, &tx_power, sizeof(s16_t))) {
+		     iface, &tx_power, sizeof(int16_t))) {
 		return -EINVAL;
 	}
 
@@ -61,7 +67,14 @@ int z_net_config_ieee802154_setup(void)
 	}
 #endif /* CONFIG_NET_L2_IEEE802154_SECURITY */
 
-	net_if_up(iface);
+	if (!IS_ENABLED(CONFIG_IEEE802154_NET_IF_NO_AUTO_START)) {
+		/* The NET_IF_NO_AUTO_START flag was set by the driver, see
+		 * ieee802154_init() to allow for configuration before starting
+		 * up the interface.
+		 */
+		net_if_flag_clear(iface, NET_IF_NO_AUTO_START);
+		net_if_up(iface);
+	}
 
 	return 0;
 }

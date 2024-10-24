@@ -1,7 +1,13 @@
 common:
   depends_on: netif
-  platform_whitelist: native_posix qemu_x86 mps2_an385
+  filter: CONFIG_FULL_LIBC_SUPPORTED
+  platform_exclude:
+    - native_posix
+    - native_posix/native/64
 tests:
-  net.socket:
+  net.socket.get_name_info:
     min_ram: 21
-    tags: net socket userspace
+    tags:
+      - net
+      - socket
+      - userspace

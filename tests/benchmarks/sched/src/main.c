@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <zephyr.h>
-#include <misc/printk.h>
+#include <zephyr/kernel.h>
+#include <zephyr/sys/printk.h>
 #include <wait_q.h>
 #include <ksched.h>
 
@@ -13,29 +13,20 @@
  * of specific low level scheduling primitives independent of overhead
  * from application or API abstractions.  It works very simply: a main
  * thread creates a "partner" thread at a higher priority, the partner
- * then sleeps using z_pend_curr_irqlock().  From this initial
+ * then sleeps using z_pend_curr().  From this initial
  * state:
  *
  * 1. The main thread calls z_unpend_first_thread()
  * 2. The main thread calls z_ready_thread()
  * 3. The main thread calls k_yield()
  *    (the kernel switches to the partner thread)
- * 4. The partner thread then runs and calls z_pend_curr_irqlock() again
+ * 4. The partner thread then runs and calls z_pend_curr() again
  *    (the kernel switches to the main thread)
  * 5. The main thread returns from k_yield()
  *
  * It then iterates this many times, reporting timestamp latencies
  * between each numbered step and for the whole cycle, and a running
  * average for all cycles run.
- *
- * Note that because this involves no timer interaction (except, on
- * some architectures, k_cycle_get_32()), it works correctly when run
- * in qemu using the -icount argument, which can produce 100%
- * deterministic behavior (not cycle-exact hardware simulation, but
- * exactly N instructions per simulated nanosecond).  You can enable
- * for "make run" using an environment variable:
- *
- * export QEMU_EXTRA_FLAGS="-icount shift=0,align=off,sleep=off"
  */
 
 #define N_RUNS 1000
@@ -56,11 +47,13 @@ enum {
 	NUM_STAMP_STATES
 };
 
-u32_t stamps[NUM_STAMP_STATES];
+uint32_t stamps[NUM_STAMP_STATES];
+
+static struct k_spinlock lock;
 
 static inline int _stamp(int state)
 {
-	u32_t t;
+	uint32_t t;
 
 	/* In theory the TSC has much lower overhead and higher
 	 * precision.  In practice it's VERY jittery in recent qemu
@@ -88,14 +81,14 @@ static void partner_fn(void *arg1, void *arg2, void *arg3)
 	printk("Running %p\n", k_current_get());
 
 	while (true) {
-		unsigned int key = irq_lock();
+		k_spinlock_key_t  key = k_spin_lock(&lock);
 
-		z_pend_curr_irqlock(key, &waitq, K_FOREVER);
+		z_pend_curr(&lock, key, &waitq, K_FOREVER);
 		stamp(PARTNER_AWAKE_PENDING);
 	}
 }
 
-void main(void)
+int main(void)
 {
 	z_waitq_init(&waitq);
 
@@ -105,15 +98,18 @@ void main(void)
 	k_tid_t th = k_thread_create(&partner_thread, partner_stack,
 				     K_THREAD_STACK_SIZEOF(partner_stack),
 				     partner_fn, NULL, NULL, NULL,
-				     partner_prio, 0, 0);
+				     partner_prio, 0, K_NO_WAIT);
 
 	/* Let it start running and pend */
-	k_sleep(100);
+	k_sleep(K_MSEC(100));
 
-	u64_t tot = 0U;
-	u32_t runs = 0U;
+	uint64_t tot = 0U;
+	uint32_t runs = 0U;
+
+	int key;
 
 	for (int i = 0; i < N_RUNS + N_SETTLE; i++) {
+		key = arch_irq_lock();
 		stamp(UNPENDING);
 		z_unpend_first_thread(&waitq);
 		stamp(UNPENDED_READYING);
@@ -128,8 +124,9 @@ void main(void)
 		 */
 		k_yield();
 		stamp(YIELDED);
+		arch_irq_unlock(key);
 
-		u32_t avg, whole = stamps[4] - stamps[0];
+		uint32_t avg, whole = stamps[4] - stamps[0];
 
 		if (++runs > N_SETTLE) {
 			/* Only compute averages after the first ~10
@@ -158,4 +155,5 @@ void main(void)
 		       whole, avg);
 	}
 	printk("fin\n");
+	return 0;
 }

@@ -1,34 +1,12 @@
----
-title: OpenISA RV32M1 LPTMR
-version: 0.1
+description: OpenISA RV32M1 LPTMR peripheral
 
-description: >
-    This binding represents the OpenISA RV32M1 LPTMR peripheral.
+compatible: "openisa,rv32m1-lptmr"
+
+include: base.yaml
 
 properties:
-    compatible:
-      type: string
-      category: required
-      description: compatible strings
-      constraint: "openisa,rv32m1-lptmr"
-      generation: define
+  reg:
+    required: true
 
-    reg:
-      type: array
-      description: MMIO register space
-      generation: define
-      category: required
-
-    interrupts:
-      type: array
-      category: required
-      description: interrupt configuration
-      generation: define
-
-    label:
-      type: string
-      category: required
-      description: Human readable string describing the device (used by Zephyr for API name)
-      generation: define
-
-...
+  interrupts:
+    required: true

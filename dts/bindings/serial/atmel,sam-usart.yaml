@@ -1,32 +1,17 @@
----
-title: Atmel SAM Family USART
-version: 0.1
+description: Atmel SAM family USART
 
-description: >
-    This binding gives a base representation of the Atmel SAM USART
+compatible: "atmel,sam-usart"
 
-inherits:
-    !include uart.yaml
+include:
+  - name: uart-controller.yaml
+  - name: pinctrl-device.yaml
 
 properties:
-    compatible:
-      constraint: "atmel,sam-usart"
+  reg:
+    required: true
 
-    reg:
-      type: array
-      description: mmio register space
-      generation: define
-      category: required
+  interrupts:
+    required: true
 
-    interrupts:
-      type: array
-      category: required
-      description: required interrupts
-      generation: define
-
-    peripheral-id:
-      type: int
-      description: peripheral ID
-      generation: define
-      category: required
-...
+  clocks:
+    required: true

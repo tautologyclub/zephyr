@@ -1,7 +1,6 @@
 tests:
   kernel.workqueue:
-    tags: kernel
-  kernel.workqueue.poll:
-    tags: kernel
-    extra_configs:
-      - CONFIG_POLL=y
+    min_flash: 34
+    tags:
+      - kernel
+      - workqueue

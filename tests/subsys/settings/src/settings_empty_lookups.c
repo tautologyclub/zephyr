@@ -7,17 +7,17 @@
 
 #include "settings_test.h"
 
-void config_empty_lookups(void)
+ZTEST(settings_config, test_config_empty_lookups)
 {
 	int rc;
 	char name[80];
 	char tmp[64];
 
 	strcpy(name, "foo/bar");
-	rc = settings_set_value(name, "tmp", 4);
-	zassert_true(rc != 0, "settings_set_value callback");
+	rc = settings_runtime_set(name, "tmp", 4);
+	zassert_true(rc != 0, "settings_runtime_set callback");
 
 	strcpy(name, "foo/bar");
-	rc = settings_get_value(name, tmp, sizeof(tmp));
-	zassert_true(rc == -EINVAL, "settings_get_value callback");
+	rc = settings_runtime_get(name, tmp, sizeof(tmp));
+	zassert_true(rc == -EINVAL, "settings_runtime_get callback");
 }

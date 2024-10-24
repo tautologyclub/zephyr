@@ -1,44 +1,18 @@
----
-title: Kinetis UART
-version: 0.1
+description: Kinetis UART
 
-description: >
-    This binding gives a base representation of the Kinetis UART
+compatible: "nxp,kinetis-uart"
 
-inherits:
-    !include uart.yaml
+include: [uart-controller.yaml, pinctrl-device.yaml]
 
 properties:
-    compatible:
-      constraint: "nxp,kinetis-uart"
+  reg:
+    required: true
 
-    reg:
-      type: array
-      description: mmio register space
-      generation: define
-      category: required
+  interrupts:
+    required: true
 
-    interrupts:
-      type: array
-      category: required
-      description: required interrupts
-      generation: define
+  clocks:
+    required: true
 
-    pinctrl-\d+:
-      type: array
-      category: optional
-      description: pinmux information for RX, TX, CTS, RTS
-      generation: define
-
-    hw-flow-control:
-      type: boolean
-      category: optional
-      description: use hw flow control
-      generation: define
-
-    clocks:
-      type: array
-      category: required
-      description: Clock gate information
-      generation: define
-...
+  pinctrl-0:
+    required: true

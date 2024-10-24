@@ -4,17 +4,31 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <ztest.h>
-#include <irq_offload.h>
-#include <misc/stack.h>
+#include <zephyr/ztest.h>
+#include <zephyr/irq_offload.h>
+#include <zephyr/debug/stack.h>
 
-#define STACKSIZE (256 + CONFIG_TEST_EXTRA_STACKSIZE)
-
-#if defined(CONFIG_USERSPACE) && defined(CONFIG_DYNAMIC_OBJECTS)
+#define STACKSIZE (256 + CONFIG_TEST_EXTRA_STACK_SIZE)
 
 static K_THREAD_STACK_DEFINE(dyn_thread_stack, STACKSIZE);
 static K_SEM_DEFINE(start_sem, 0, 1);
 static K_SEM_DEFINE(end_sem, 0, 1);
+static ZTEST_BMEM struct k_thread *dyn_thread;
+static struct k_thread *dynamic_threads[CONFIG_MAX_THREAD_BYTES * 8];
+
+void k_sys_fatal_error_handler(unsigned int reason, const struct arch_esf *esf)
+{
+	if (reason != K_ERR_KERNEL_OOPS) {
+		printk("wrong error reason\n");
+		TC_END_REPORT(TC_FAIL);
+		k_fatal_halt(reason);
+	}
+	if (k_current_get() != dyn_thread) {
+		printk("wrong thread crashed\n");
+		TC_END_REPORT(TC_FAIL);
+		k_fatal_halt(reason);
+	}
+}
 
 static void dyn_thread_entry(void *p1, void *p2, void *p3)
 {
@@ -31,7 +45,6 @@ static void prep(void)
 
 static void create_dynamic_thread(void)
 {
-	struct k_thread *dyn_thread;
 	k_tid_t tid;
 
 	dyn_thread = k_object_alloc(K_OBJ_THREAD);
@@ -40,10 +53,12 @@ static void create_dynamic_thread(void)
 
 	tid = k_thread_create(dyn_thread, dyn_thread_stack, STACKSIZE,
 			      dyn_thread_entry, NULL, NULL, NULL,
-			      K_PRIO_PREEMPT(0), K_USER, 0);
+			      K_PRIO_PREEMPT(0), K_USER, K_FOREVER);
 
 	k_object_access_grant(&start_sem, tid);
 	k_object_access_grant(&end_sem, tid);
+
+	k_thread_start(tid);
 
 	k_sem_give(&start_sem);
 
@@ -57,7 +72,6 @@ static void create_dynamic_thread(void)
 
 static void permission_test(void)
 {
-	struct k_thread *dyn_thread;
 	k_tid_t tid;
 
 	dyn_thread = k_object_alloc(K_OBJ_THREAD);
@@ -66,9 +80,11 @@ static void permission_test(void)
 
 	tid = k_thread_create(dyn_thread, dyn_thread_stack, STACKSIZE,
 			      dyn_thread_entry, NULL, NULL, NULL,
-			      K_PRIO_PREEMPT(0), K_USER, 0);
+			      K_PRIO_PREEMPT(0), K_USER, K_FOREVER);
 
 	k_object_access_grant(&start_sem, tid);
+
+	k_thread_start(tid);
 
 	/*
 	 * Notice dyn_thread will not have permission to access
@@ -99,32 +115,75 @@ static void permission_test(void)
  * not have permission to one of the semaphore. If permissions are cleared
  * correctly when thread is destroyed, the second should raise kernel oops.
  */
-static void test_dyn_thread_perms(void)
+ZTEST(thread_dynamic, test_dyn_thread_perms)
 {
+	if (!(IS_ENABLED(CONFIG_USERSPACE))) {
+		ztest_test_skip();
+	}
+
 	permission_test();
 
 	TC_PRINT("===== must have access denied on k_sem %p\n", &end_sem);
 }
 
-#else /* (CONFIG_USERSPACE && CONFIG_DYNAMIC_OBJECTS) */
-
-static void prep(void)
+ZTEST(thread_dynamic, test_thread_index_management)
 {
-}
+	int i, ctr = 0;
 
-static void create_dynamic_thread(void)
-{
-	TC_PRINT("Test skipped. Userspace and dynamic objects required.\n");
-	ztest_test_skip();
-}
+	/* Create thread objects until we run out of ids */
+	while (true) {
+		struct k_thread *t = k_object_alloc(K_OBJ_THREAD);
 
-static void test_dyn_thread_perms(void)
-{
-	TC_PRINT("Test skipped. Userspace and dynamic objects required.\n");
-	ztest_test_skip();
-}
+		if (t == NULL) {
+			break;
+		}
 
-#endif /* !(CONFIG_USERSPACE && CONFIG_DYNAMIC_OBJECTS) */
+		dynamic_threads[ctr] = t;
+		ctr++;
+	}
+
+	zassert_true(ctr != 0, "unable to create any thread objects");
+
+	TC_PRINT("created %d thread objects\n", ctr);
+
+	/* Show that the above NULL return value wasn't because we ran out of
+	 * heap space. For that we need to duplicate how objects are allocated
+	 * in kernel/userspace.c. We pessimize the alignment to the worst
+	 * case to simplify things somewhat.
+	 */
+	size_t ret = 1024 * 1024;  /* sure-to-fail initial value */
+	void *blob;
+
+	switch (K_OBJ_THREAD) {
+	/** @cond keep_doxygen_away */
+	#include <zephyr/otype-to-size.h>
+	/** @endcond */
+	}
+	blob = k_object_create_dynamic_aligned(16, ret);
+	zassert_true(blob != NULL, "out of heap memory");
+
+	/* Free one of the threads... */
+	k_object_free(dynamic_threads[0]);
+
+	/* And show that we can now create another one, the freed thread's
+	 * index should have been garbage collected.
+	 */
+	dynamic_threads[0] = k_object_alloc(K_OBJ_THREAD);
+	zassert_true(dynamic_threads[0] != NULL,
+		     "couldn't create thread object\n");
+
+	/* TODO: Implement a test that shows that thread IDs are properly
+	 * recycled when a thread object is garbage collected due to references
+	 * dropping to zero. For example, we ought to be able to exit here
+	 * without calling k_object_free() on any of the threads we created
+	 * here; their references would drop to zero and they would be
+	 * automatically freed. However, it is known that the thread IDs are
+	 * not properly recycled when this happens, see #17023.
+	 */
+	for (i = 0; i < ctr; i++) {
+		k_object_free(dynamic_threads[i]);
+	}
+}
 
 /**
  * @ingroup kernel_thread_tests
@@ -133,8 +192,12 @@ static void test_dyn_thread_perms(void)
  * @details This is a simple test to create a user thread
  * dynamically via k_object_alloc() under a kernel thread.
  */
-static void test_kernel_create_dyn_user_thread(void)
+ZTEST(thread_dynamic, test_kernel_create_dyn_user_thread)
 {
+	if (!(IS_ENABLED(CONFIG_USERSPACE))) {
+		ztest_test_skip();
+	}
+
 	create_dynamic_thread();
 }
 
@@ -145,22 +208,19 @@ static void test_kernel_create_dyn_user_thread(void)
  * @details This is a simple test to create a user thread
  * dynamically via k_object_alloc() under a user thread.
  */
-static void test_user_create_dyn_user_thread(void)
+ZTEST_USER(thread_dynamic, test_user_create_dyn_user_thread)
 {
 	create_dynamic_thread();
 }
 
 /* test case main entry */
-void test_main(void)
+void *thread_test_setup(void)
 {
 	k_thread_system_pool_assign(k_current_get());
 
 	prep();
 
-	ztest_test_suite(thread_dynamic,
-			 ztest_unit_test(test_kernel_create_dyn_user_thread),
-			 ztest_user_unit_test(test_user_create_dyn_user_thread),
-			 ztest_unit_test(test_dyn_thread_perms)
-			 );
-	ztest_run_test_suite(thread_dynamic);
+	return NULL;
 }
+
+ZTEST_SUITE(thread_dynamic, NULL, thread_test_setup, NULL, NULL, NULL);

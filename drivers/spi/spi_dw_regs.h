@@ -2,6 +2,7 @@
 
 /*
  * Copyright (c) 2015 Intel Corporation.
+ * Copyright (c) 2023 Synopsys, Inc. All rights reserved.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -43,9 +44,6 @@ extern "C" {
 /* Register helpers */
 DEFINE_MM_REG_WRITE(ctrlr0, DW_SPI_REG_CTRLR0, 32)
 DEFINE_MM_REG_READ(ctrlr0, DW_SPI_REG_CTRLR0, 32)
-DEFINE_MM_REG_WRITE(ctrlr1, DW_SPI_REG_CTRLR1, 16)
-DEFINE_MM_REG_READ(ctrlr1, DW_SPI_REG_CTRLR1, 16)
-DEFINE_MM_REG_WRITE(ser, DW_SPI_REG_SER, 8)
 DEFINE_MM_REG_WRITE(txftlr, DW_SPI_REG_TXFTLR, 32)
 DEFINE_MM_REG_WRITE(rxftlr, DW_SPI_REG_RXFTLR, 32)
 DEFINE_MM_REG_READ(rxftlr, DW_SPI_REG_RXFTLR, 32)
@@ -54,9 +52,19 @@ DEFINE_MM_REG_WRITE(dr, DW_SPI_REG_DR, 32)
 DEFINE_MM_REG_READ(dr, DW_SPI_REG_DR, 32)
 DEFINE_MM_REG_READ(ssi_comp_version, DW_SPI_REG_SSI_COMP_VERSION, 32)
 
+#ifdef CONFIG_SPI_DW_ACCESS_WORD_ONLY
+DEFINE_MM_REG_WRITE(ctrlr1, DW_SPI_REG_CTRLR1, 32)
+DEFINE_MM_REG_READ(ctrlr1, DW_SPI_REG_CTRLR1, 32)
+DEFINE_MM_REG_WRITE(ser, DW_SPI_REG_SER, 32)
+#else
+DEFINE_MM_REG_WRITE(ctrlr1, DW_SPI_REG_CTRLR1, 16)
+DEFINE_MM_REG_READ(ctrlr1, DW_SPI_REG_CTRLR1, 16)
+DEFINE_MM_REG_WRITE(ser, DW_SPI_REG_SER, 8)
+#endif
+
 /* ICR is on a unique bit */
 DEFINE_TEST_BIT_OP(icr, DW_SPI_REG_ICR, DW_SPI_SR_ICR_BIT)
-#define clear_interrupts(addr) test_bit_icr(addr)
+#define clear_interrupts(dev) test_bit_icr(dev)
 
 #ifdef __cplusplus
 }

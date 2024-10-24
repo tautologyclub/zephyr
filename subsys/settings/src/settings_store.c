@@ -12,34 +12,21 @@
 #include <stddef.h>
 #include <sys/types.h>
 #include <errno.h>
-
-#include "settings/settings.h"
+#include <zephyr/kernel.h>
+#include <zephyr/sys/iterable_sections.h>
+#include <zephyr/settings/settings.h>
 #include "settings_priv.h"
 
-#include <logging/log.h>
+#include <zephyr/logging/log.h>
 LOG_MODULE_DECLARE(settings, CONFIG_SETTINGS_LOG_LEVEL);
 
-struct settings_dup_check_arg {
-	const char *name;
-	const char *val;
-	size_t val_len;
-	int is_dup;
-};
-
-sys_slist_t  settings_load_srcs;
+sys_slist_t settings_load_srcs;
 struct settings_store *settings_save_dst;
+extern struct k_mutex settings_lock;
 
 void settings_src_register(struct settings_store *cs)
 {
-	sys_snode_t *prev, *cur;
-
-	prev = NULL;
-
-	SYS_SLIST_FOR_EACH_NODE(&settings_load_srcs, cur) {
-		prev = cur;
-	}
-
-	sys_slist_insert(&settings_load_srcs, prev, &cs->cs_next);
+	sys_slist_append(&settings_load_srcs, &cs->cs_next);
 }
 
 void settings_dst_register(struct settings_store *cs)
@@ -47,24 +34,18 @@ void settings_dst_register(struct settings_store *cs)
 	settings_save_dst = cs;
 }
 
-static void settings_load_cb(char *name, void *val_read_cb_ctx, off_t off,
-			     void *cb_arg)
-{
-	int rc = settings_set_value_priv(name, val_read_cb_ctx, off, 0);
-
-	if (rc != 0) {
-		LOG_ERR("set-value failure. key: %s error(%d)",
-			log_strdup(name), rc);
-	} else {
-		LOG_DBG("set-value OK. key: %s",
-			log_strdup(name));
-	}
-	(void)rc;
-}
-
 int settings_load(void)
 {
+	return settings_load_subtree(NULL);
+}
+
+int settings_load_subtree(const char *subtree)
+{
 	struct settings_store *cs;
+	int rc;
+	const struct settings_load_arg arg = {
+		.subtree = subtree
+	};
 
 	/*
 	 * for every config store
@@ -72,102 +53,61 @@ int settings_load(void)
 	 *    apply config
 	 *    commit all
 	 */
-
+	k_mutex_lock(&settings_lock, K_FOREVER);
 	SYS_SLIST_FOR_EACH_CONTAINER(&settings_load_srcs, cs, cs_next) {
-		cs->cs_itf->csi_load(cs, settings_load_cb, NULL);
+		cs->cs_itf->csi_load(cs, &arg);
 	}
-	return settings_commit(NULL);
-}
-
-/* val_off - offset of value-string within line entries */
-static int settings_cmp(char const *val, size_t val_len, void *val_read_cb_ctx,
-		 off_t val_off)
-{
-	size_t len_read, exp_len;
-	size_t rem;
-	char buf[16];
-	int rc;
-	off_t off = 0;
-
-	for (rem = val_len; rem > 0; rem -= len_read) {
-		len_read = exp_len = MIN(sizeof(buf), rem);
-		rc = settings_line_val_read(val_off, off, buf, len_read,
-			   &len_read, val_read_cb_ctx);
-		if (rc) {
-			break;
-		}
-
-		if (len_read != exp_len) {
-			rc = 1;
-			break;
-		}
-
-		rc = memcmp(val, buf, len_read);
-		if (rc) {
-			break;
-		}
-		val += len_read;
-		off += len_read;
-	}
-
+	rc = settings_commit_subtree(subtree);
+	k_mutex_unlock(&settings_lock);
 	return rc;
 }
 
-static void settings_dup_check_cb(char *name, void *val_read_cb_ctx, off_t off,
-				  void *cb_arg)
+int settings_load_subtree_direct(
+	const char             *subtree,
+	settings_load_direct_cb cb,
+	void                   *param)
 {
-	struct settings_dup_check_arg *cdca = (struct settings_dup_check_arg *)
-					      cb_arg;
-	size_t len_read;
+	struct settings_store *cs;
 
-	if (strcmp(name, cdca->name)) {
-		return;
+	const struct settings_load_arg arg = {
+		.subtree = subtree,
+		.cb = cb,
+		.param = param
+	};
+	/*
+	 * for every config store
+	 *    load config
+	 *    apply config
+	 *    commit all
+	 */
+	k_mutex_lock(&settings_lock, K_FOREVER);
+	SYS_SLIST_FOR_EACH_CONTAINER(&settings_load_srcs, cs, cs_next) {
+		cs->cs_itf->csi_load(cs, &arg);
 	}
-
-	len_read = settings_line_val_get_len(off, val_read_cb_ctx);
-	if (len_read != cdca->val_len) {
-		cdca->is_dup = 0;
-	} else if (len_read == 0) {
-		cdca->is_dup = 1;
-	} else {
-		if (!settings_cmp(cdca->val, cdca->val_len,
-				  val_read_cb_ctx, off)) {
-			cdca->is_dup = 1;
-		} else {
-			cdca->is_dup = 0;
-		}
-	}
+	k_mutex_unlock(&settings_lock);
+	return 0;
 }
 
 /*
  * Append a single value to persisted config. Don't store duplicate value.
  */
-int settings_save_one(const char *name, void *value, size_t val_len)
+int settings_save_one(const char *name, const void *value, size_t val_len)
 {
+	int rc;
 	struct settings_store *cs;
-	struct settings_dup_check_arg cdca;
 
 	cs = settings_save_dst;
 	if (!cs) {
 		return -ENOENT;
 	}
 
-	if (val_len > 0 && value == NULL) {
-		return -EINVAL;
-	}
+	k_mutex_lock(&settings_lock, K_FOREVER);
 
-	/*
-	 * Check if we're writing the same value again.
-	 */
-	cdca.name = name;
-	cdca.val = (char *)value;
-	cdca.is_dup = 0;
-	cdca.val_len = val_len;
-	cs->cs_itf->csi_load(cs, settings_dup_check_cb, &cdca);
-	if (cdca.is_dup == 1) {
-		return 0;
-	}
-	return cs->cs_itf->csi_save(cs, name, (char *)value, val_len);
+	rc = cs->cs_itf->csi_save(cs, name, (char *)value, val_len);
+
+	k_mutex_unlock(&settings_lock);
+
+	return rc;
 }
 
 int settings_delete(const char *name)
@@ -177,8 +117,12 @@ int settings_delete(const char *name)
 
 int settings_save(void)
 {
+	return settings_save_subtree(NULL);
+}
+
+int settings_save_subtree(const char *subtree)
+{
 	struct settings_store *cs;
-	struct settings_handler *ch;
 	int rc;
 	int rc2;
 
@@ -192,7 +136,10 @@ int settings_save(void)
 	}
 	rc = 0;
 
-	SYS_SLIST_FOR_EACH_CONTAINER(&settings_handlers, ch, node) {
+	STRUCT_SECTION_FOREACH(settings_handler_static, ch) {
+		if (subtree && !settings_name_steq(ch->name, subtree, NULL)) {
+			continue;
+		}
 		if (ch->h_export) {
 			rc2 = ch->h_export(settings_save_one);
 			if (!rc) {
@@ -200,10 +147,41 @@ int settings_save(void)
 			}
 		}
 	}
+
+#if defined(CONFIG_SETTINGS_DYNAMIC_HANDLERS)
+	struct settings_handler *ch;
+	SYS_SLIST_FOR_EACH_CONTAINER(&settings_handlers, ch, node) {
+		if (subtree && !settings_name_steq(ch->name, subtree, NULL)) {
+			continue;
+		}
+		if (ch->h_export) {
+			rc2 = ch->h_export(settings_save_one);
+			if (!rc) {
+				rc = rc2;
+			}
+		}
+	}
+#endif /* CONFIG_SETTINGS_DYNAMIC_HANDLERS */
+
 	if (cs->cs_itf->csi_save_end) {
 		cs->cs_itf->csi_save_end(cs);
 	}
 	return rc;
+}
+
+int settings_storage_get(void **storage)
+{
+	struct settings_store *cs = settings_save_dst;
+
+	if (!cs) {
+		return -ENOENT;
+	}
+
+	if (cs->cs_itf->csi_storage_get) {
+		*storage = cs->cs_itf->csi_storage_get(cs);
+	}
+
+	return 0;
 }
 
 void settings_store_init(void)

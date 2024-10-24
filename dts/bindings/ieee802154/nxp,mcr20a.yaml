@@ -1,29 +1,27 @@
-#
 # Copyright (c) 2018, NXP
-#
 # SPDX-License-Identifier: Apache-2.0
-#
----
-title: NXP MCR20A 802.15.4 Wireless Transceiver
-version: 0.1
 
-description: >
-    This is a representation of the NXP MCR20A wireless transceiver.
+description: NXP MCR20A 802.15.4 wireless transceiver
 
-inherits:
-    !include spi-device.yaml
+compatible: "nxp,mcr20a"
+
+include: spi-device.yaml
 
 properties:
-    compatible:
-      constraint: "nxp,mcr20a"
+  irqb-gpios:
+    type: phandle-array
+    required: true
+    description: Interrupt pin.
 
-    irqb-gpios:
-      type: compound
-      category: required
-      generation: define, use-prop-name
+      The interrupt pin of MCR20A is open-drain, active low.
+      If connected directly the MCU pin should be configured
+      as pull-up, active low.
 
-    reset-gpios:
-      type: compound
-      category: required
-      generation: define, use-prop-name
-...
+  reset-gpios:
+    type: phandle-array
+    required: true
+    description: RESET pin.
+
+      The RESET pin of MCR20A is active low.
+      If connected directly the MCU pin should be configured
+      as active low.

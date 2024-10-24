@@ -6,34 +6,39 @@
  */
 
 #include <stddef.h>
+
+#include <soc.h>
 #include <zephyr/types.h>
-#include <misc/printk.h>
+#include <zephyr/sys/printk.h>
+
+#include "hal/cpu.h"
+
 #include "memq.h"
 #include "mayfly.h"
 
 static struct {
 	memq_link_t *head;
 	memq_link_t *tail;
-	u8_t        enable_req;
-	u8_t        enable_ack;
-	u8_t        disable_req;
-	u8_t        disable_ack;
+	uint8_t        enable_req;
+	uint8_t        enable_ack;
+	uint8_t        disable_req;
+	uint8_t        disable_ack;
 } mft[MAYFLY_CALLEE_COUNT][MAYFLY_CALLER_COUNT];
 
 static memq_link_t mfl[MAYFLY_CALLEE_COUNT][MAYFLY_CALLER_COUNT];
-static u8_t mfp[MAYFLY_CALLEE_COUNT];
+static uint8_t mfp[MAYFLY_CALLEE_COUNT];
 
 #if defined(MAYFLY_UT)
-static u8_t _state;
+static uint8_t _state;
 #endif /* MAYFLY_UT */
 
 void mayfly_init(void)
 {
-	u8_t callee_id;
+	uint8_t callee_id;
 
 	callee_id = MAYFLY_CALLEE_COUNT;
 	while (callee_id--) {
-		u8_t caller_id;
+		uint8_t caller_id;
 
 		caller_id = MAYFLY_CALLER_COUNT;
 		while (caller_id--) {
@@ -44,7 +49,7 @@ void mayfly_init(void)
 	}
 }
 
-void mayfly_enable(u8_t caller_id, u8_t callee_id, u8_t enable)
+void mayfly_enable(uint8_t caller_id, uint8_t callee_id, uint8_t enable)
 {
 	if (enable) {
 		if (mft[callee_id][caller_id].enable_req ==
@@ -58,16 +63,20 @@ void mayfly_enable(u8_t caller_id, u8_t callee_id, u8_t enable)
 		    mft[callee_id][caller_id].disable_ack) {
 			mft[callee_id][caller_id].disable_req++;
 
+			/* set mayfly callee pending */
+			mfp[callee_id] = 1U;
+
+			/* pend the callee for execution */
 			mayfly_pend(caller_id, callee_id);
 		}
 	}
 }
 
-u32_t mayfly_enqueue(u8_t caller_id, u8_t callee_id, u8_t chain,
+uint32_t mayfly_enqueue(uint8_t caller_id, uint8_t callee_id, uint8_t chain,
 			struct mayfly *m)
 {
-	u8_t state;
-	u8_t ack;
+	uint8_t state;
+	uint8_t ack;
 
 	chain = chain || !mayfly_prio_is_equal(caller_id, callee_id) ||
 		!mayfly_is_enabled(caller_id, callee_id) ||
@@ -118,21 +127,21 @@ mayfly_enqueue_pend:
 	return 0;
 }
 
-static void dequeue(u8_t callee_id, u8_t caller_id, memq_link_t *link,
+static void dequeue(uint8_t callee_id, uint8_t caller_id, memq_link_t *link,
 		    struct mayfly *m)
 {
-	u8_t req;
+	uint8_t req;
 
 	req = m->_req;
 	if (((req - m->_ack) & 0x03) != 1U) {
-		u8_t ack;
+		uint8_t ack;
 
 #if defined(MAYFLY_UT)
-		u32_t mayfly_ut_run_test(void);
+		uint32_t mayfly_ut_run_test(void);
 		void mayfly_ut_mfy(void *param);
 
 		if (_state && m->fp == mayfly_ut_mfy) {
-			static u8_t single;
+			static uint8_t single;
 
 			if (!single) {
 				single = 1U;
@@ -150,10 +159,12 @@ static void dequeue(u8_t callee_id, u8_t caller_id, memq_link_t *link,
 		m->_link = link;
 
 		/* reset mayfly state to idle */
+		cpu_dmb();
 		ack = m->_ack;
 		m->_ack = req;
 
 		/* re-insert, if re-pended by interrupt */
+		cpu_dmb();
 		if (((m->_req - ack) & 0x03) == 1U) {
 #if defined(MAYFLY_UT)
 			printk("%s: RACE\n", __func__);
@@ -165,16 +176,16 @@ static void dequeue(u8_t callee_id, u8_t caller_id, memq_link_t *link,
 	}
 }
 
-void mayfly_run(u8_t callee_id)
+void mayfly_run(uint8_t callee_id)
 {
-	u8_t disable = 0U;
-	u8_t enable = 0U;
-	u8_t caller_id;
+	uint8_t disable = 0U;
+	uint8_t enable = 0U;
+	uint8_t caller_id;
 
 	if (!mfp[callee_id]) {
 		return;
 	}
-	mfp[callee_id] = 1U;
+	mfp[callee_id] = 0U;
 
 	/* iterate through each caller queue to this callee_id */
 	caller_id = MAYFLY_CALLER_COUNT;
@@ -187,8 +198,7 @@ void mayfly_run(u8_t callee_id)
 				 mft[callee_id][caller_id].tail,
 				 (void **)&m);
 		while (link) {
-			u8_t state;
-
+			uint8_t state;
 #if defined(MAYFLY_UT)
 			_state = 0U;
 #endif /* MAYFLY_UT */
@@ -215,6 +225,17 @@ void mayfly_run(u8_t callee_id)
 					 mft[callee_id][caller_id].tail,
 					 (void **)&m);
 
+/**
+ * When using cooperative thread implementation, an issue has been seen where
+ * pended mayflies are never executed in certain scenarios.
+ * This happens when mayflies with higher caller_id are constantly pended, in
+ * which case lower value caller ids never get to be executed.
+ * By allowing complete traversal of mayfly queues for all caller_ids, this
+ * does not happen, however this means that more than one mayfly function is
+ * potentially executed in a mayfly_run(), with added execution time as
+ * consequence.
+ */
+#if defined(CONFIG_BT_MAYFLY_YIELD_AFTER_CALL)
 			/* yield out of mayfly_run if a mayfly function was
 			 * called.
 			 */
@@ -224,11 +245,16 @@ void mayfly_run(u8_t callee_id)
 				 * processed.
 				 */
 				if (caller_id || link) {
+					/* set mayfly callee pending */
+					mfp[callee_id] = 1U;
+
+					/* pend the callee for execution */
 					mayfly_pend(callee_id, callee_id);
 
 					return;
 				}
 			}
+#endif
 		}
 
 		if (mft[callee_id][caller_id].disable_req !=
@@ -261,15 +287,15 @@ void mayfly_ut_mfy(void *param)
 {
 	printk("%s: ran.\n", __func__);
 
-	(*((u32_t *)param))++;
+	(*((uint32_t *)param))++;
 }
 
 void mayfly_ut_test(void *param)
 {
-	static u32_t *count;
+	static uint32_t *count;
 	static memq_link_t link;
 	static struct mayfly mfy = {0, 0, &link, NULL, mayfly_ut_mfy};
-	u32_t err;
+	uint32_t err;
 
 	printk("%s: req= %u, ack= %u\n", __func__, mfy._req, mfy._ack);
 
@@ -288,11 +314,11 @@ void mayfly_ut_test(void *param)
 	}
 }
 
-u32_t mayfly_ut_run_test(void)
+uint32_t mayfly_ut_run_test(void)
 {
 	static memq_link_t link;
 	static struct mayfly mfy = {0, 0, &link, NULL, mayfly_ut_test};
-	u32_t err;
+	uint32_t err;
 
 	printk("%s: req= %u, ack= %u\n", __func__, mfy._req, mfy._ack);
 
@@ -309,12 +335,12 @@ u32_t mayfly_ut_run_test(void)
 	return 0;
 }
 
-u32_t mayfly_ut(void)
+uint32_t mayfly_ut(void)
 {
-	static u32_t count;
+	static uint32_t count;
 	static memq_link_t link;
 	static struct mayfly mfy = {0, 0, &link, &count, mayfly_ut_test};
-	u32_t err;
+	uint32_t err;
 
 	printk("%s: req= %u, ack= %u\n", __func__, mfy._req, mfy._ack);
 

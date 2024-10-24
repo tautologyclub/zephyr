@@ -1,7 +1,7 @@
-.. _userspace_protected_memory:
+.. zephyr:code-sample:: userspace_protected_memory
+   :name: Userspace Protected Memory
 
-Userspace Protected Memory
-##########################
+   Use memory partitioning to protect memory between threads.
 
 Overview
 ********
@@ -17,7 +17,7 @@ Requirements
 
 The sample is dependent on the subsystem app_memory, and it will
 not run on boards that do not support the subsystem.  The sample
-was tested on the following boards qemu_x86,frdm_k64, an 96b_carbon.
+was tested on the following boards qemu_x86,frdm_k64, and ``96b_carbon/stm32f401xe``.
 
 Building and Running
 ********************
@@ -26,7 +26,7 @@ This example will only cover the qemu_x86 board, since the sample
 just prints text to a console.
 
 .. zephyr-app-commands::
-   :zephyr-app: samples/basic/userspace/shared_mem
+   :zephyr-app: samples/userspace/shared_mem
    :board: qemu_x86
    :goals: build run
    :compact:
@@ -38,9 +38,11 @@ message is the output of the first message, and the resulting
 output is the first message without spaces.  The two messages are
 marked as 1 and 1' respectively.
 
+Exit QEMU by pressing :kbd:`CTRL+A` :kbd:`x`.
+
 Two definitions can be inserted to change the wheel settings and print
 the state information.  To enable the definitions uncomment the last
-two lines in CMakelists.txt.
+two lines in CMakeLists.txt.
 
 Functionality
 *************
@@ -55,4 +57,3 @@ performs a simulation of the enigma machine to produce cypher text(CT).
 The CT is copied to a shared memory partition connecting to the third
 thread. The third thread prints the CT to the console with a banner
 denoting the content as CYPHER TEXT.
-
